@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+
+#PBS -l walltime=168:0:0
+#PBS -r n
+#PBS -j oe
+#PBS -W umask=002
+
+umask 002
+echo timestamp $(date +%s)
+
+#-----------------------------------------------------#
+#                                                     #
+# INITIALIZE VARIABLES                                #
+#                                                     #
+#-----------------------------------------------------#
+if [[ -z $SAMPLE ]]; then echo "ERROR: you must supply SAMPLE variable as -v to qsub"; exit 42; fi
+if [[ -z $DIR ]]; then echo "ERROR: you must supply DIR variable as -v to qsub"; exit 42; fi
+if [[ -z $THREADS ]]; then echo "ERROR: you must supply THREADS variable as -v to qsub"; exit 42; fi
+if [[ -z $MAX_MEM ]]; then echo "ERROR: you must supply MiAX_MEM variable as -v to qsub"; exit 42; fi
+if [[ -z $PIPELINE_HOME ]]; then echo "ERROR: you must supply PIPELINE_HOME variable as -v to qsub"; exit 42; fi
+if [[ -z $CAPTURE_KIT ]]; then echo "ERROR: you must supply CAPTURE_KIT variable as -v to qsub"; exit 42; fi
+if [[ -z $REFERENCE ]]; then echo "ERROR: you must supply REFERENCE variable as -v to qsub"; exit 42; fi
+if [[ -z $MIP_DESIGN_FILE ]]; then echo "ERROR: you must supply MIP_DESIGN_FILE variable as -v to qsub"; exit 42; fi
+if [[ -z $MIP_DESIGN_SOURCE ]]; then echo "ERROR: you must supply MIP_DESIGN_SOURCE variable as -v to qsub"; exit 42; fi
+if [[ -z $DONE ]]; then echo "ERROR: you must supply DONE variable as -v to qsub"; exit 42; fi
+if [[ -z $SFS ]]; then export SFS=0; fi
+
+NAME=pipeline.mip.part_3_1.stats_QC
+echo "****************************************"
+echo "* ${NAME}.qsub"
+echo "****************************************"
+echo "* SAMPLE:        $SAMPLE"
+echo "* DIR:           $DIR"
+echo "* THREADS:       $THREADS"
+echo "* MAX_MEM:       $MAX_MEM"
+echo "* PIPELINE_HOME: $PIPELINE_HOME"
+echo "* CAPTURE_KIT:   $CAPTURE_KIT"
+echo "* SFS            $SFS"
+echo "* VERBOSE        $VERBOSE"
+echo "* DONE:          $DONE"
+
+#-----------------------------------------------------#
+#                                                     #
+# START PIPELINE                                      #
+#                                                     #
+#-----------------------------------------------------#
+cd $DIR
+# INIT PIPELINE VARIABLES
+. $PIPELINE_HOME/data/templates/init_pipeline.sh $PIPELINE_HOME
+# DEFINING PIPELINE SPECIFIC VARIABLES
+# LOAD FUNCTION LIBRARY
+. $PIPELINE_HOME/data/templates/function.library
+# INIT THE SAMPLE
+set_verbose $VERBOSE
+sample_init $SAMPLE $DIR
+if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then echo "INIT SAMPLE PROBLEM"; exit 42; fi
+echo "* BED:					$BED"
+echo "* REFERENCE:				$REFERENCE"
+echo "* MIP_DESIGN_FILE:			$MIP_DESIGN_FILE"
+echo "* MIP_DESIGN_SOURCE:			$MIP_DESIGN_SOURCE"
+echo "****************************************"
+
+##########################################
+## FULL PIPELINE - MIP
+echo "*** STARTING STATS AND QC"
+##########################################
+cd $DIR
+
+## METRICS
+donefile_coverageStats=.${SAMPLE}.${NAME}.coverageStats.done
+donefile_DofC_armsAndTargets=.${SAMPLE}.${NAME}.DofC_armsAndTargets.done
+donefile_flagstat=.${SAMPLE}.${NAME}.flagstat.done
+donefile_verifyBamID=.${SAMPLE}.${NAME}.verifyBamID.done
+donefile_callableLoci=.${SAMPLE}.${NAME}.callableLoci.done
+
+#execute jobs
+if [[ $SFS -eq 1 || ! `find ./ -maxdepth 1 -name "$DONE"` ]]; then
+
+  if [[ $SFS -eq 1 || ! `find ./ -maxdepth 1 -name $donefile_coverageStats` ]]; then
+    if [ $VERBOSE ]; then echo "****** CMD: sample_metrics_coverageStats_MIPs ${GATK_MIP_BAMFILE} ${MIP_DESIGN_FILE} ${MIP_DESIGN_SOURCE}";fi
+    # activate conda environment for mip_pipeline - required for cmd1
+    conda_init
+    conda activate mip_pipeline
+    sample_metrics_coverageStats_MIPs ${GATK_MIP_BAMFILE} ${MIP_DESIGN_FILE} ${MIP_DESIGN_SOURCE} 2>&1 > ${SAMPLE}.${NAME}.coverageStats.out & process_coverageStats=${!}
+  fi
+  if [[ $SFS -eq 1 || ! `find ./ -maxdepth 1 -name $donefile_DofC_armsAndTargets` ]]; then
+    if [ $VERBOSE ]; then echo "****** CMD: sample_metrics_DepthOfCoverage_MIPs $REFERENCE $GATK_MIP_BAMFILE ${SAMPLE}.mip.arms-and-targets.no_flank $BED";fi
+    sample_metrics_DepthOfCoverage_MIPs $REFERENCE $GATK_MIP_BAMFILE ${SAMPLE}.mip.arms-and-targets.no_flank $BED 2>&1 > ${SAMPLE}.${NAME}.DofC_armsAndTargets.out & process_DofC_armsAndTargets=${!}
+  fi
+  if [[ $SFS -eq 1 || ! `find ./ -maxdepth 1 -name $donefile_flagstat` ]]; then
+    if [ $VERBOSE ]; then echo "****** CMD: sample_metrics_flagstat ${GATK_MIP_BAMFILE} ${GATK_MIP_PREFIX}.${SAMPLE}.flagstat";fi
+    sample_metrics_flagstat ${GATK_MIP_BAMFILE} ${GATK_MIP_BAMFILE}.flagstat 2>&1 > ${SAMPLE}.${NAME}.flagstat.out & process_flagstat=${!}
+  fi
+  if [[ $SFS -eq 1 || ! `find ./ -name $donefile_verifyBamID` ]]; then
+    if [ $VERBOSE ]; then echo "****** CMD: sample_metrics_verifyBamID ${GATK_MIP_BAMFILE} ${GATK_MIP_PREFIX}.${SAMPLE}.verifyBamID";fi
+    sample_metrics_verifyBamID ${GATK_MIP_BAMFILE} ${GATK_MIP_BAMFILE}.verifyBamID 2>&1 > ${SAMPLE}.${NAME}.verifyBamID.out & process_verifyBamID=${!}
+  fi
+  if [[ $SFS -eq 1 || ! `find ./ -name $donefile_callableLoci` ]]; then
+    if [ $VERBOSE ]; then echo "****** CMD: sample_callableLoci ${GATK_MIP_BAMFILE} $BED.targets-only.bed"; fi
+    sample_callableLoci ${GATK_MIP_BAMFILE} $BED.targets-only.bed & process_callableLoci=${!}
+  fi
+
+  #iterate over each running background process to get exit status and create .done file (if job succeeded); track overall METRICS step failure
+  unset failure
+  run=coverageStats
+  if [ $process_coverageStats ]; then
+    wait $process_coverageStats; status=$?
+    if [ $VERBOSE ]; then echo "run=$run"; echo "process id: $process_coverageStats"; echo "exit status: $status"; echo "donefile: $donefile_coverageStats"; fi
+    if [ $status -eq 0 ]; then echo sub-run $run SUCCESS; touch $donefile_coverageStats; else echo "*** $run run failed"; failure=1; fi
+  else
+    echo "SKIPPED sub-run $run"
+  fi
+
+  run=DofC_armsAndTargets
+  if [ $process_DofC_armsAndTargets ]; then
+    wait $process_DofC_armsAndTargets; status=$?
+    if [ $VERBOSE ]; then echo "run=$run"; echo "process id: $process_DofC_armsAndTargets"; echo "exit status: $status"; echo "donefile: $donefile_DofC_armsAndTargets"; fi
+    if [ $status -eq 0 ]; then echo sub-run $run SUCCESS; touch $donefile_DofC_armsAndTargets; else echo "*** $run run failed"; failure=1; fi
+  else
+    echo "SKIPPED sub-run $run"
+  fi
+
+  run=flagstat
+  if [ $process_flagstat ]; then
+    wait $process_flagstat; status=$?
+    if [ $VERBOSE ]; then echo "run=$run"; echo "process id: $process_flagstat"; echo "exit status: $status"; echo "donefile: $donefile_flagstat"; fi
+    if [ $status -eq 0 ]; then echo sub-run $run SUCCESS; touch $donefile_flagstat; else echo "*** $run run failed"; failure=1; fi
+  else
+    echo "SKIPPED sub-run $run"
+  fi
+
+  run=verifyBamID
+  if [ $process_verifyBamID ]; then
+    wait $process_verifyBamID; status=$?
+    if [ $VERBOSE ]; then echo "run=$run"; echo "process id: $process_verifyBamID"; echo "exit status: $status"; echo "donefile: $donefile_verifyBamID"; fi
+    if [ $status -eq 0 ]; then echo sub-run $run SUCCESS; touch $donefile_verifyBamID; else echo "*** $run run failed"; failure=1; fi
+  else
+    echo "SKIPPED sub-run $run"
+  fi
+
+  run=callableLoci
+  if [ $process_callableLoci ]; then
+    wait $process_callableLoci; status=$?
+    if [ $VERBOSE ]; then echo "run=$run"; echo "process id: $process_callableLoci"; echo "exit status: $status"; echo "donefile: $donefile_callableLoci"; fi
+    if [ $status -eq 0 ]; then echo sub-run $run SUCCESS; touch $donefile_callableLoci; else echo "*** $run run failed"; failure=1; fi
+  else
+    echo "SKIPPED sub-run $run"
+  fi
+  
+
+  #create .done file for entire METRICS step, if all sub-jobs ran successfully
+  if [ $failure ]; then exit 42; else touch $DONE; if [ $VERBOSE ]; then echo SUCCESS; fi;  fi
+else if [ $VERBOSE ]; then echo "****** SKIP Metrics"; fi
+fi
+echo timestamp $(date +%s)

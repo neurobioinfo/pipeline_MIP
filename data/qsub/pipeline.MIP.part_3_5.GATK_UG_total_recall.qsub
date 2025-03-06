@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+
+#PBS -l walltime=168:0:0
+#PBS -r n
+#PBS -j oe
+#PBS -W umask=002
+
+umask 002
+echo timestamp $(date +%s)
+
+#-----------------------------------------------------#
+#                                                     #
+# INITIALIZE VARIABLES                                #
+#                                                     #
+#-----------------------------------------------------#
+if [[ -z $SAMPLE ]]; then echo "ERROR: you must supply SAMPLE variable as -v to qsub"; exit 42; fi
+if [[ -z $DIR ]]; then echo "ERROR: you must supply DIR variable as -v to qsub"; exit 42; fi
+if [[ -z $THREADS ]]; then echo "ERROR: you must supply THREADS variable as -v to qsub"; exit 42; fi
+if [[ -z $MAX_MEM ]]; then echo "ERROR: you must supply MAX_MEM variable as -v to qsub"; exit 42; fi
+if [[ -z $PIPELINE_HOME ]]; then echo "ERROR: you must supply PIPELINE_HOME variable as -v to qsub"; exit 42; fi
+#if [[ -z $VARIANTS ]]; then echo "ERROR: you must supply VARIANTS variable as -v to qsub"; exit 42; fi
+#if [[ -z $CAPTURE_KIT ]]; then echo "ERROR: you must supply CAPTURE_KIT variable as -v to qsub"; exit 42; fi
+if [[ -z $DONE ]]; then echo "ERROR: you must supply DONE variable as -v to qsub"; exit 42; fi
+if [[ -z $SFS ]]; then export SFS=0; fi
+
+echo "******************************************************"
+echo "* pipeline.MIP.part_3_5.GATK_UG_total_recall.qsub"
+echo "******************************************************"
+echo "* SAMPLE:        $SAMPLE"
+echo "* DIR:           $DIR"
+echo "* THREADS:       $THREADS"
+echo "* MAX_MEM:       $MAX_MEM"
+echo "* PIPELINE_HOME: $PIPELINE_HOME"
+#echo "* CAPTURE_KIT:   $CAPTURE_KIT"
+echo "* SFS:           $SFS"
+echo "* VERBOSE:       $VERBOSE"
+echo "* DONE:          $DONE"
+
+#-----------------------------------------------------#
+#                                                     #
+# START PIPELINE                                      #
+#                                                     #
+#-----------------------------------------------------#
+cd $DIR
+# INIT PIPELINE VARIABLES
+. $PIPELINE_HOME/data/templates/init_pipeline.sh $PIPELINE_HOME
+# DEFINING PIPELINE SPECIFIC VARIABLES
+# LOAD FUNCTION LIBRARY
+. $PIPELINE_HOME/data/templates/function.library
+# INIT THE SAMPLE
+set_verbose $VERBOSE
+sample_init $SAMPLE $DIR
+if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then echo "INIT SAMPLE PROBLEM"; exit 42; fi
+#if   [ $CAPTURE_KIT == "SS38" ];       then export BED=$BED38;       export BED_FLANK=$BED38_FLANK
+#elif [ $CAPTURE_KIT == "SS50" ];       then export BED=$BED50;       export BED_FLANK=$BED50_FLANK
+#elif [ $CAPTURE_KIT == "SSV4" ];       then export BED=$BEDV4;       export BED_FLANK=$BEDV4_FLANK
+#elif [ $CAPTURE_KIT == "SSV5" ];       then export BED=$BEDV5;       export BED_FLANK=$BEDV5_FLANK
+#elif [ $CAPTURE_KIT == "SSV5C" ];      then export BED=$BEDV5CLINIC; export BED_FLANK=$BEDV5CLINIC_FLANK
+#elif [ $CAPTURE_KIT == "TruSeq" ];     then export BED=$BEDTS;       export BED_FLANK=$BEDTS_FLANK
+#elif [ $CAPTURE_KIT == "NGv3" ];       then export BED=$BEDNGv3;     export BED_FLANK=$BEDNGv3_FLANK
+#elif [ $CAPTURE_KIT == "NGvCRome" ];   then export BED=$BEDNGvCRome; export BED_FLANK=$BEDNGvCRome_FLANK
+#elif [ $CAPTURE_KIT == "CCDS"];        then export BED=$BEDCCDS;     export BED_FLANK=$BEDCCDS_FLANK
+#fi
+if [[ -z $VCFFILE ]]; then VCFFILE=$GATK_MIP_TOTAL_RECALL_VCFFILE; fi
+echo "* VCFFILE:               $VCFFILE"
+if [[ -z $VCFFILE_VARIANT_SITES ]]; then VCFFILE_VARIANT_SITES=$GATK_MIP_TOTAL_RECALL_VARIANT_SITES_VCFFILE; fi
+echo "* VCFFILE_VARIANT_SITES: $VCFFILE_VARIANT_SITES"
+if [[ -z $BAMFILE ]]; then BAMFILE=$GATK_MIP_BAMFILE; fi 
+echo "* BAMFILE:               $BAMFILE"
+if [[ -z $BED ]]; then BED=$BEDALLKITS_FLANK; fi
+echo "* BED:               $BED"
+echo "* TARGETS-ONLY BED:  $BED.targets-only.bed"
+if [[ -z $DOWNSAMPLE ]]; then DOWNSAMPLE=$MIP_DOWNSAMPLE; fi
+echo "* DOWNSAMPLE:            $DOWNSAMPLE"
+echo "******************************************************"
+
+######################################################
+## FULL PIPELINE - MIP
+#echo "*** STARTING GATK_UG_TOTAL_RECALL"
+######################################################
+cd $DIR
+
+if [ $VERBOSE ]; then echo "****** CMD: sample_variant_total_recall $BAMFILE $VCFFILE $VCFFILE_VARIANT_SITES $BED.targets-only.bed $DOWNSAMPLE"; fi
+sample_variant_total_recall_MIPs $BAMFILE $VCFFILE $VCFFILE_VARIANT_SITES $BED.targets-only.bed $DOWNSAMPLE
+if [ $? -eq 0 ]; then touch $DONE; if [ $VERBOSE ]; then echo SUCCESS; fi; else exit 42; fi
+echo timestamp $(date +%s)

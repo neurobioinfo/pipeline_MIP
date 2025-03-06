@@ -1,0 +1,57 @@
+PreAlignmentProcessing.py (designFile, read1File, read2File, molecular_tag_length, tagged_read_number) missing args; using default values of molecular_tag_length=0 and tagged_read_number=2
+script args: ['new_PreAlignmentProcessing.py']
+Filename: new_PreAlignmentProcessing.py
+
+Line #    Mem usage    Increment   Line Contents
+================================================
+    68     27.2 MiB      0.0 MiB   @profile
+    69                             def createLookup():
+    70     29.0 MiB      1.8 MiB     for mip in mips:
+    71     29.0 MiB      0.0 MiB       for arm in mip.getArms():
+    72     29.0 MiB      0.0 MiB         key=arm.getSeq()[0:6]
+    73     29.0 MiB      0.0 MiB         if key not in lookup: lookup[key]=[]
+    74     29.0 MiB      0.0 MiB         lookup[key].append(arm.getMip())
+    75     29.0 MiB      0.0 MiB         key=revcomp(arm.getSeq())[0:6]
+    76     29.0 MiB      0.0 MiB         if key not in lookup: lookup[key]=[]
+    77     29.0 MiB      0.0 MiB         lookup[key].append(arm.getMip())
+
+
+Filename: new_PreAlignmentProcessing.py
+
+Line #    Mem usage    Increment   Line Contents
+================================================
+    86     29.0 MiB      0.0 MiB   @profile
+    87                             def doit():
+    88                               global mips
+    89                               global total_reads_counter
+    90                               global passed_reads_counter
+    91                               global lookup
+    92     29.0 MiB      0.0 MiB     with gzip.open(read1File) as file1, gzip.open(read2File) as file2:
+    93     37.2 MiB      8.1 MiB       for lines1, lines2 in izip(read_in_chunks(file1, 4), read_in_chunks(file2, 4)):
+    94     37.2 MiB      0.0 MiB         total_reads_counter+=1
+    95     37.2 MiB      0.0 MiB         [names, seqs, strands, quals] = [(line1.rstrip().split(' ')[0], line2.rstrip().split(' ')[0]) for (line1, line2) in izip(lines1, lines2)]
+    96     37.2 MiB      0.0 MiB         read1 = ReadPair.Read(names[0], '1', seqs[0], quals[0])
+    97     37.2 MiB      0.0 MiB         read2 = ReadPair.Read(names[1], '2', seqs[1], quals[1])
+    98     37.2 MiB      0.0 MiB         rp = ReadPair.ReadPair(names[0], read1, read2)
+    99     37.2 MiB      0.0 MiB         read1.setReadPair(rp)
+   100     37.2 MiB      0.0 MiB         read2.setReadPair(rp)
+   101     37.2 MiB      0.0 MiB         for read in rp.getReads():
+   102     37.2 MiB      0.0 MiB           key = read.getSeq()[0:6]
+   103     37.2 MiB      0.0 MiB           if key in lookup:
+   104     37.2 MiB      0.0 MiB             for mip in lookup[key]:
+   105     37.2 MiB      0.0 MiB               for arm in mip.getArms():
+   106     37.2 MiB      0.0 MiB                 basicAlign(read, arm)
+   107     37.2 MiB      0.0 MiB         linkReadAndMips(rp, findMipInReadPair(pairwise(rp.getAlignments())))
+   108     37.2 MiB      0.0 MiB         rp._mips = list(set(rp._mips))
+   109     37.2 MiB      0.0 MiB         nhits = len(rp._mips)
+   110     37.2 MiB      0.0 MiB         if nhits > 0:
+   111     37.2 MiB      0.0 MiB           mip = rp.pickMip() if nhits > 1 else rp._mips[0]						# randomly assign a matching mip to the read pair in the fastq files, if > 1 mip hit for the read pair
+   112     37.2 MiB      0.0 MiB           rp.trimArmsFromReads(mip)									# remove mip arm sequences from reads
+   113     37.2 MiB      0.0 MiB           process_ambiguous(rp, mip) if nhits > 1 else process_unambigous(rp)	# slightly different way to handle read pairs with > 1 mip hit (rare), compared to those with == 1 (vast majority)
+   114     37.2 MiB      0.0 MiB           passed_reads_counter+=1
+   115     37.2 MiB      0.0 MiB         del lines1, lines2, names, seqs, strands, quals, line1, line2, read1, read2, rp, read, key
+   116     37.2 MiB     -0.0 MiB         if total_reads_counter == 10: break
+   117     29.2 MiB     -8.0 MiB     f1.close()
+   118     29.2 MiB      0.0 MiB     f2.close()
+
+

@@ -1,0 +1,15 @@
+export WALLTIME=48:0:0
+export SFS=0
+export KEEP_INTERMEDIATES=0
+export MAX_MEM=6
+export THREADS=1
+export CENTER=IC
+export ADAPTERS=$PIPELINE_HOME/data/templates/Adapters.IC.MIPs.2014-01-22.fasta
+export QUEUE=$PIPELINE_HOME/soft/src/queueInterpreter/QueueInterpreter
+export ACCOUNT=ish-284-ad
+export CAPTURE_KIT=MIP
+export REFERENCE=$PIPELINE_HOME/data/reference/human_g1k_v37.fasta
+export PREFIX=MIP
+export DOWNSAMPLE=100000
+export MOLECULAR_TAG_LENGTH=0
+export TAGGED_READ_NUMBER=2

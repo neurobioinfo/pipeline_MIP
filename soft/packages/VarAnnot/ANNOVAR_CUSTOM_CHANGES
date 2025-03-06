@@ -1,0 +1,82 @@
+# List of the changes that have been done in annotate_variation.pl in order to run properly regarding our projects/data requirements
+
+*******
+convert2annovar.pl 
+*******
+@@@@@@@@@@@@@@@@@@
+@  no change have been made when doing the last update because Kai Wang apparently did the same changes as what follows (for convert2annovar.pl only)
+@@@@@@@@@@@@@@@@@@
+commented some lines to avoid zygozity set to 'homizygot', especially when vcf contains several samples
+lines 1383 to 1385 ($Revision 524) are now commented :
+#                       if ($mut_allele2 and $zygosity eq 'hom') {
+#                               $mut_allele2 = '';
+#                       }
+
+*******
+annotate_variation.pl
+*******
+IN ORDER TO BE EASILY REPRODUCIBLE, THESE CHANGES SHOULD BE MADE IN THE SAME ORDER AS THEY ARE WRITTEN HERE 
+*******
+.changes : better handling of gene & isoform names
+line 476 ($Revision: 786f656dfc1c75f5e96057863ca1c1862f085087 $) :
+            $name2 .= ";" . $name;
+
+.comments: avoid DA=UNKNOWN & VFT=unknown
+lines 2966 to 2969 & 2971 ($Revision: 786f656dfc1c75f5e96057863ca1c1862f085087 $) :
+#           if (m/does not have correct ORF annotation/) {
+#               $orfwarning++;
+#               $badorf{$seqid}++;
+#           } else {
+                undef $orfwarning;
+#           }
+
+.changes : proper handling of the mitochondrial chromosome
+lines : 425, 1245, 1877, 2412, 2647, 2860, 3093 ($Revision: 786f656dfc1c75f5e96057863ca1c1862f085087 $) :
+    7 occurences of  $chr =~ s/^chr//;  are now replaced by  $chr =~ s/^chr//; $chr =~ s/^MT$/M/;   # CUSTOM CHANGES !!! originally was : $chr =~ s/^chr//;
+lines : 2068, 2084, 2101, 2174, 2203, 2261 ($Revision: 786f656dfc1c75f5e96057863ca1c1862f085087 $) :
+    $chr =~ s/^chr//i;  are now replaced by  $chr =~ s/^chr//i; $chr =~ s/^MT$/M/;    # CUSTOM CHANGES !!! originally was : $chr =~ s/^chr//i;
+line : 2014 ($Revision: 786f656dfc1c75f5e96057863ca1c1862f085087 $) :
+    $chrom =~ s/^chr//; becomes
+        line 2014   $chrom =~ s/^chr//;     #delete the chr in snp135, etc
+        line 2015   $chrom =~ s/^MT$/M/;        # CUSTOM ADDING !!!
+
+.changes + movings : more precise annotation of splicing mutations
+lines 1014 to 1031 ($Revision: 786f656dfc1c75f5e96057863ca1c1862f085087 $) are moved to lines 1002 to 1039 ($Revision: 786f656dfc1c75f5e96057863ca1c1862f085087 $ updated) and become :
+                #changed per Oscar 20131109
+                #if (%splicing and $end-$start+1<=$indel_splicing_threshold) {
+                #   my (@coding, @noncoding);
+                #   for my $key (keys %splicing) {
+                #       if ($ncrna{$key}) {
+                if (%splicing) {
+                    my (@coding, @noncoding, @exosplicing, @utr5splicing, @utr3splicing, @introsplicing);
+                    for my $key (keys %newsplicing) {
+                        $key =~ m/^([^\(]+)/;
+                        if ($ncrna{$1}) {
+                            push @noncoding, $key;
+                        } elsif ($exonic{$1}) {
+                            push @exosplicing, $key;
+                            $exonic{$1}--;
+                            $exonic{$1} == 0 and delete $exonic{$1};
+                        } elsif ($utr5{$1}) {
+                            push @utr5splicing, $key;
+                            $newutr5{$1 . "($utr5{$1})"}--;
+                            $newutr5{$1 . "($utr5{$1})"} == 0 and delete $newutr5{$1 . "($utr5{$1})"};
+                        } elsif ($utr3{$1}) {
+                            push @utr3splicing, $key;
+                            $newutr3{$1 . "($utr3{$1})"}--;
+                            $newutr3{$1 . "($utr3{$1})"} == 0 and delete $newutr3{$1 . "($utr3{$1})"};
+                        } elsif ($intronic{$1}) {
+                            push @introsplicing, $key;
+                            $intronic{$1}--;
+                            $intronic{$1} == 0 and delete $intronic{$1};
+                        } else {
+                            push @coding, $key;
+                        }
+                    }
+                    @exosplicing and print OUT "exonic_splicing\t", join(",", sort @exosplicing), "\t", $nextline, "\n";
+                    @utr5splicing and print OUT "UTR5_splicing\t", join(",", sort @utr5splicing), "\t", $nextline, "\n";
+                    @utr3splicing and print OUT "UTR3_splicing\t", join(",", sort @utr3splicing), "\t", $nextline, "\n";
+                    @introsplicing and print OUT "intronic_splicing\t", join(",", sort @introsplicing), "\t", $nextline, "\n";
+                    @coding and print OUT "splicing\t", join(",", sort @coding), "\t", $nextline, "\n";
+                    @noncoding and print OUT "ncRNA_splicing\t", join(",", sort @noncoding), "\t", $nextline, "\n";
+                }

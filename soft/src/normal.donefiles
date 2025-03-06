@@ -1,0 +1,17 @@
+.-1.pipeline.MIP.part_0_1.preprocessing.done
+.-1.pipeline.MIP.part_1_4.align_bwa_mem_pe.in_fastq.done
+.-2.pipeline.MIP.part_0_1.preprocessing.done
+.-2.pipeline.MIP.part_1_4.align_bwa_mem_pe.in_fastq.done
+.-3.pipeline.MIP.part_0_1.preprocessing.done
+.-3.pipeline.MIP.part_1_4.align_bwa_mem_pe.in_fastq.done
+.-4.pipeline.MIP.part_0_1.preprocessing.done
+.-4.pipeline.MIP.part_1_4.align_bwa_mem_pe.in_fastq.done
+..pipeline.generic.part_2_0.combine_sample_libs.primary_aln.done
+..pipeline.MIP.part_2_1.GATK_data_processing.in_bam.done
+..pipeline.MIP.part_3_1.Exome_stats_QC.done
+..pipeline.mip.part_3_1.stats_QC.callableLoci.done
+..pipeline.mip.part_3_1.stats_QC.coverageStats.done
+..pipeline.mip.part_3_1.stats_QC.DofC_armsAndTargets.done
+..pipeline.mip.part_3_1.stats_QC.flagstat.done
+..pipeline.mip.part_3_1.stats_QC.verifyBamID.done
+..pipeline.MIP.part_3_6.GATK_HC.done

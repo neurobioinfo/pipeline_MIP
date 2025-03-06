@@ -1,0 +1,4 @@
+
+java -jar /RQexec/dionnela/soft/packages/GATK-git-2.6-4/dist/GenomeAnalysisTK.jar -T SelectVariants --intervals /RQexec/dionnela/data/Exome_SureSelect/Beds/SureSelect_All_Exon_concat_38mb_50mb_V4_without_annotation.v37.bed -V Omni25_genotypes_1525_samples_v2.b37.PASS.ALL.sites.vcf --out Omni25_genotypes_1525_samples_v2.b37.PASS.ALL.sites.in_concat_38mb_50mb_V4.vcf -R /RQexec/dionnela/data/pipeline.svn/data/reference/human_g1k_v37.fasta
+
+keep variants in chroms 1-22

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+
+#PBS -l nodes=1:ppn=12
+#PBS -l walltime=4:0:0
+#PBS -r n
+#PBS -j oe
+#PBS -W umask=002
+
+umask 002
+echo timestamp $(date +%s)
+
+#-----------------------------------------------------#
+#                                                     #
+# INITIALIZE VARIABLES                                #
+#                                                     #
+#-----------------------------------------------------#
+if [[ -z $SAMPLE ]]; then echo "ERROR: you must supply SAMPLE variable as -v to qsub"; exit 42; fi
+if [[ -z $DIR ]]; then echo "ERROR: you must supply DIR variable as -v to qsub"; exit 42; fi
+if [[ -z $THREADS ]]; then echo "ERROR: you must supply THREADS variable as -v to qsub"; exit 42; fi
+if [[ -z $MAX_MEM ]]; then echo "ERROR: you must supply MAX_MEM variable as -v to qsub"; exit 42; fi
+if [[ -z $PIPELINE_HOME ]]; then echo "ERROR: you must supply PIPELINE_HOME variable as -v to qsub"; exit 42; fi
+if [[ -z $DONE ]]; then echo "ERROR: you must supply DONE variable as -v to qsub"; exit 42; fi
+if [[ -z $SFS ]]; then export SFS=0; fi
+
+echo "******************************************************"
+echo "* pipeline.MIP.part_3_6.GATK_HC.qsub"
+echo "******************************************************"
+echo "* SAMPLE:        $SAMPLE"
+echo "* DIR:           $DIR"
+echo "* THREADS:       $THREADS"
+echo "* MAX_MEM:       $MAX_MEM"
+echo "* PIPELINE_HOME: $PIPELINE_HOME"
+echo "* SFS:           $SFS"
+echo "* VERBOSE:       $VERBOSE"
+echo "* DONE:          $DONE"
+
+#-----------------------------------------------------#
+#                                                     #
+# START PIPELINE                                      #
+#                                                     #
+#-----------------------------------------------------#
+cd $DIR
+# INIT PIPELINE VARIABLES
+. $PIPELINE_HOME/data/templates/init_pipeline.sh $PIPELINE_HOME
+# DEFINING PIPELINE SPECIFIC VARIABLES
+# LOAD FUNCTION LIBRARY
+. $PIPELINE_HOME/data/templates/function.library
+# INIT THE SAMPLE
+set_verbose $VERBOSE
+sample_init $SAMPLE $DIR
+if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then echo "INIT SAMPLE PROBLEM"; exit 42; fi
+if [[ -z $GVCF ]]; then GVCF=$GATK_MIP_HC_GVCFFILE; fi
+echo "* GVCF:          $GVCF"
+if [[ -z $VCFFILE ]]; then VCFFILE=$GATK_MIP_HC_VCFFILE; fi
+echo "* VCFFILE:       $VCFFILE"
+if [[ -z $BAMFILE ]]; then BAMFILE=$GATK_MIP_BAMFILE; fi 
+echo "* BAMFILE:       $BAMFILE"
+if [[ -z $HC_BAM_OUT ]]; then HC_BAM_OUT=$GATK_HC_BAMFILE; fi
+echo "* HC_BAM_OUT:    $HC_BAM_OUT"
+if [[ -z $BEDFILE ]]; then BEDFILE=$CALLING_BED; fi
+echo "* BEDFILE:       $BEDFILE"
+
+echo "******************************************************"
+
+######################################################
+## FULL PIPELINE - MIP
+#echo "*** STARTING GATK_HC"
+######################################################
+cd $DIR
+
+if [ $VERBOSE ]; then echo "****** CMD: sample_variant_haplotype_caller_MIPs $BAMFILE $GVCF $VCFFILE $HC_BAM_OUT $BEDFILE"; fi
+sample_variant_haplotype_caller_MIPs $BAMFILE $GVCF $VCFFILE $HC_BAM_OUT $BEDFILE
+if [ $? -eq 0 ]; then touch $DONE; if [ $VERBOSE ]; then echo SUCCESS; fi; else exit 42; fi
+echo timestamp $(date +%s)

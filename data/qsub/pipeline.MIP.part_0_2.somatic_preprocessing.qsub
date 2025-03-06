@@ -1,0 +1,85 @@
+#!/bin/bash
+
+#PBS -l walltime=168:0:0
+#PBS -r n
+#PBS -j oe
+#PBS -W umask=002
+
+umask 002
+echo timestamp $(date +%s)
+
+#-----------------------------------------------------#
+#                                                     #
+# INITIALIZE VARIABLES                                #
+#                                                     #
+#-----------------------------------------------------#
+if [[ -z $SAMPLE ]]; then echo "ERROR: you must supply SAMPLE variable as -v to qsub"; exit 42; fi
+if [[ -z $DIR ]]; then echo "ERROR: you must supply DIR variable as -v to qsub"; exit 42; fi
+if [[ -z $THREADS ]]; then echo "ERROR: you must supply THREADS variable as -v to qsub"; exit 42; fi
+if [[ -z $MAX_MEM ]]; then echo "ERROR: you must supply MiAX_MEM variable as -v to qsub"; exit 42; fi
+if [[ -z $PIPELINE_HOME ]]; then echo "ERROR: you must supply PIPELINE_HOME variable as -v to qsub"; exit 42; fi
+if [[ -z $ENCODING ]]; then echo "ERROR: you must supply ENCODING variable as -v to qsub"; exit 42; fi
+if [[ -z $FASTQ1 ]]; then echo "ERROR: you must supply FASTQ1 variable as -v to qsub"; exit 42; fi
+if [[ -z $FASTQ2 ]]; then echo "ERROR: you must supply FASTQ2 variable as -v to qsub"; exit 42; fi
+if [[ -z $MIP_DESIGN_FILE ]]; then echo "ERROR: you must supply MIP_DESIGN_FILE variable as -v to qsub"; exit 42; fi
+if [[ -z $MIP_DESIGN_SOURCE ]]; then echo "ERROR: you must supply MIP_DESIGN_SOURCE variable as -v to qsub"; exit 42; fi
+if [[ -z $ADAPTERS ]]; then echo "ERROR: you must supply ADAPTERS variable as -v to qsub"; exit 42; fi
+if [[ -z $SOMATIC_PROCESSING_THREADS ]]; then echo "ERROR: you must supply SOMATIC_PROCESSING_THREADS as -v to qsub"; exit 42; fi
+if [[ -z $DONE ]]; then echo "ERROR: you must supply DONE variable as -v to qsub"; exit 42; fi
+if [[ -z $SFS ]]; then export SFS=0; fi
+
+echo "*******************************************"
+echo "* pipeline.MIP.part_0_2.somatic_preprocessing.qsub "
+echo "*******************************************"
+echo "* SAMPLE:                    $SAMPLE"
+echo "* DIR:                       $DIR"
+echo "* THREADS:                   $THREADS"
+echo "* MAX_MEM:                   $MAX_MEM"
+echo "* PIPELINE_HOME:             $PIPELINE_HOME"
+echo "* ENCODING:                  $ENCODING"
+echo "* FASTQ1:                    $FASTQ1"
+echo "* FASTQ2:                    $FASTQ2"
+echo "* MIP_DESIGN_FILE            $MIP_DESIGN_FILE"
+echo "* MIP_DESIGN_SOURCE          $MIP_DESIGN_SOURCE"
+echo "* CONSENSUS_FASTQ_PREFIX     $CONSENSUS_FASTQ_PREFIX"
+echo "* MOLECULAR_TAG_LENGTH       $MOLECULAR_TAG_LENGTH"
+echo "* MIP_KEY_LENGTH             $MIP_KEY_LENGTH"
+echo "* TAGGED_READ_NUMBER         $TAGGED_READ_NUMBER"
+echo "* ADAPTERS:                  $ADAPTERS"
+echo "* SOMATIC_PROCESSING_THREADS $SOMATIC_PROCESSING_THREADS"
+echo "* RUN:                       $RUN"
+echo "* SFS                        $SFS"
+echo "* VERBOSE                    $VERBOSE"
+echo "* DONE:                      $DONE"
+echo "*******************************************"
+
+#-----------------------------------------------------#
+# START PIPELINE                                      #
+#-----------------------------------------------------#
+cd $DIR
+# INIT PIPELINE VARIABLES
+. $PIPELINE_HOME/data/templates/init_pipeline.sh $PIPELINE_HOME
+# DEFINING PIPELINE SPECIFIC VARIABLES
+# LOAD FUNCTION LIBRARY
+. $PIPELINE_HOME/data/templates/function.library
+# INIT THE SAMPLE
+set_verbose $VERBOSE
+sample_init $SAMPLE $DIR
+
+##########################################
+## FULL PIPELINE - MIP
+echo "*** STARTING SOMATIC PREPROCESSING"
+##########################################
+cd $DIR
+
+## PRE PROCESSING
+cmd="sample_preprocessing_somatic_MIPs $FASTQ1 $FASTQ2 $MIP_DESIGN_FILE $MIP_DESIGN_SOURCE $CONSENSUS_FASTQ_PREFIX $MOLECULAR_TAG_LENGTH $TAGGED_READ_NUMBER $MIP_KEY_LENGTH $SOMATIC_PROCESSING_THREADS"
+report_prefix=$(echo $FASTQ1|sed -e 's/_read1//g' -e 's/.fastq.gz//g')
+report1=${report_prefix}.preprocessing_report.txt
+report2=${report_prefix}_redundant_mips
+if [ $VERBOSE ]; then echo "****** CMD: $cmd"; fi && $cmd
+if [ $? -eq 0 ]; then 
+  touch $DONE; 
+  if [ $VERBOSE ]; then echo SUCCESS; fi;  
+else exit 42; fi
+echo timestamp $(date +%s)

@@ -1,0 +1,376 @@
+#!/bin/bash
+
+export PIPELINE_HOME=${1:-~/soft/src/pipeline_MIPs.svn}
+export gatk=/RQexec/spiegelm/data/pipeline.svn/soft/packages/GenomeAnalysisTK-3.6/dist/GenomeAnalysisTK.jar
+
+list () 
+{ 
+    echo {$(echo $@|tr ' ' ',')}
+}
+
+#########################
+# RAW INPUT CONVERSIONS #
+#########################
+samToFastq() {
+  qsub=$PIPELINE_HOME/data/qsub/pipeline.generic.part_0_0.samToFastq.qsub
+  for bam in $@; do 
+    if [[ ! -s $bam ]]; then echo "bamfile $bam empty or non-existent"; continue; fi
+    qsub $qsub -N $(basename $bam).$(basename $qsub) -v BAM=$bam -o $(dirname $bam) -A ish-284-ad
+  done
+}
+
+#one-liner to convert MIP fastq pair files to molecular-tag-prefixed read names (and trim mol tags from read2 file)
+generateMolecularFastq() {
+  read1in=$1
+  read2in=$2
+  awk -v read1out=$read1in.converted.fastq  -v read2out=$read2in.converted.fastq '{ if (NR==1 && FNR==1) file=1; if (NR!=1 && FNR==1) file=2; if (file==1) { if (NR%4==1) read=$1; if (NR%4==2) seq=$1; if (NR%4==3) strand=$1; if (NR%4==0) { qual=$1; tag=substr(seq,1,12); seq=substr(seq,13,length(seq)-12); qual=substr(qual,13,length(qual)-12); gsub(/@/,"@"tag"_",read); READ[FNR]=read; SEQ[FNR]=seq; STRAND[FNR]=strand; QUAL[FNR]=qual; print read >> read2out; print seq >> read2out; print strand >> read2out; print qual >> read2out }; }; if (file==2) { if (FNR%4==1) { gsub(/2$/,"1",READ[FNR+3]); print READ[FNR+3] >> read1out } else { print >> read1out } }}' <(zcat $read2in) <(zcat $read1in)
+}
+
+##########################
+# GENERATE MOLECULAR BAM #
+##########################
+#function to generate molecular bam files from aligned MIP bamfiles (from fastq with molecular tags in read name)
+generateMolecularBam() {
+  bam=$1
+  sam=$bam.sam
+  if [[ ! -s $sam ]]; then samtools view $bam -o $sam; fi
+  awk -v body=$sam.body -v head=$sam.header 'BEGIN{FS=OFS="\t"}{split($1,c1,"_"); tag=c1[1]"_"c1[2]"_"c1[3]; printf "%s", $1 >> body; for (i=2; i<=NF; i++) if ($i~/^RG:/) {gsub(/S[0-9]+-lane[0-9]+/,"",$i); gsub(/RG:Z:/,"RG:Z:"tag"_",$i); printf "\t%s", $i >> body; rg=$i; gsub(/RG:Z:/,"",rg)} else {printf "\t%s", $i >> body}; printf "\n" >> body; RG["@RG\tID:"rg"\tPL:illumina\tPU:"rg"_PU\tLB:"rg"_LIB1\tSM:"rg"\tCN:IC"]++}END{for (i in RG) print i >> head}' $sam
+  cat <(samtools view -H $bam|grep -P "@(HD|SQ)") $sam.header <(samtools view -H $bam|grep @PG) $sam.body|samtools view -Sb - -o $(echo $bam|sed 's/.bam$/.molecular.bam/g')
+  samtools index $(echo $bam|sed 's/.bam$/.molecular.bam/g')
+  rm $sam.body $sam.header
+}
+
+generateMolecularBamsPerMip() {
+  bam=$1
+  sam=$bam.sam
+  if [[ ! -s $bam ]]; then echo "error: bam file $bam empty or does not exist"; return 42; fi
+  if [[ ! -s $sam ]]; then samtools view $bam -o $sam; fi
+  awk -v head=$sam.header 'BEGIN{FS=OFS="\t"}{split($1,c1,"_"); mip=c1[1]"_"c1[2]; tag=mip"_"c1[3]; body=FILENAME"."mip".body"; tmpfiles[body]++; printf "%s", $1 >> body; for (i=2; i<=NF; i++) if ($i~/^RG:/) {gsub(/S[0-9]+-lane[0-9]+/,"",$i); gsub(/RG:Z:/,"RG:Z:"tag"_",$i); printf "\t%s", $i >> body; rg=$i; gsub(/RG:Z:/,"",rg)} else {printf "\t%s", $i >> body}; printf "\n" >> body; RG["@RG\tID:"rg"\tPL:illumina\tPU:"rg"_PU\tLB:"rg"_LIB1\tSM:"rg"\tCN:IC"]++}END{for (i in RG) print i >> head; for (i in tmpfiles) print i >> FILENAME".body.files"}' $sam
+  for file in $(cat $sam.body.files); do 
+    outfile=$(echo $file|sed 's/.body$/.molecular.bam/g')
+    cat <(samtools view -H $bam|grep -P "@(HD|SQ)") $sam.header <(samtools view -H $bam|grep @PG) $file|samtools view -Sb - -o $outfile
+    samtools index $outfile
+    rm $file 
+  done
+  rm $sam.header $sam.body.files
+}
+
+###################
+# SOMATIC CALLING #
+###################
+#NOTE: generateMolecularVcf and parseSomaticCalls are deprecated; looks like the thing to do will be to use DepthOfCoverage and parseDofC.py for more thorough and flexible somatic calling
+DEPRECATED_generateMolecularVcf() {
+  read bam bed <<< $@
+  #if [[ ! -s $bam || ! -s $bed ]]; then echo "$FUNCNAME error: input file(s) missing or empty"; return 42; fi
+  . ~spiegelm/.profile; init_pipeline
+  MAX_MEM=${MAX_MEM:-$[$(free -g|head -2|tail -1|awk '{print $4+$NF}')-2]}
+  java -Xmx${MAX_MEM}g -jar $gatk3_2 -T UnifiedGenotyper -nt 24 -R $REF --input_file $bam --out $bam.vcf --metrics_file $bam.metrics --intervals $bed --dbsnp $DBSNP --genotype_likelihoods_model SNP --downsampling_type NONE --read_filter BadCigar --annotation HomopolymerRun 2> $bam.UnifiedGenotyper.err
+}
+
+DEPRECATED_parseSomaticCalls() {
+  for vcf in $@; do 
+    if [[ ! -s $vcf ]]; then 
+      echo "$FUNCNAME error: vcf file $vcf empty or does not exist"
+      continue
+    fi
+  cat <(echo -e "chr\tpos\tref\talt\tratio_tags_all\tratio_tags_5x") <(awk -F"\t" '{if ($1~/#/) next; n=0; d=0; n2=0; d2=0; printf "%s", $1"\t"$2"\t"$4"\t"$5; for (i=10; i<=NF; i++) if ($i~/^1/) {n++; d++; split($i,a,":"); if (a[3]>=10) {n2++; d2++}} else if ($i~/^0\/0/) {split($i,a,":"); if (a[3]>=10) {d2++}; d++}; printf "\t%s", n"/"d; printf "\t%s", n2"/"d2; printf "\n"}' $vcf) > $vcf.somatic_calls
+  done
+}
+
+parseSomaticCalls() {
+  if [[ $1 =~ --depth=.* ]]; then minDepth=$(echo $1|sed 's/.*=//g'); shift; else minDepth=0; fi
+  for vcf in $@; do
+    if [[ ! -s $vcf ]]; then 
+      echo "$FUNCNAME error: vcf file $vcf empty or does not exist"
+      continue
+    fi
+  awk -v minDepth=$minDepth 'BEGIN{FS=OFS="\t"; print "chr\tpos\tref\talt\twild_type\theterozygous\thomozygous"}{if ($1~/#/) next; var=$1"\t"$2"\t"$4"\t"$5; wt=0; het=0; hom=0; for (i=10; i<=NF; i++) {split($i,a,":"); call=a[1]; depth=a[3]; if (call=="./." || depth < minDepth) continue; if (call=="0/0") {wt++} else if (call=="0/1" || call=="0/2" || call=="0/3") {het++} else if (call=="1/1" || call=="2/2" || call=="3/3") {hom++}}; print var,wt,het,hom}' $vcf > $vcf.somatic_calls
+  done
+}
+
+generateDofCPileup() {
+  #. ~spiegelm/.profile
+  read bam_file bed mem <<< $@
+  if [[ ! -s $bam_file ]]; then echo "$FUNCNAME error: bam_file (1st argument) not specified or does not exist"; return 42; fi
+  if [[ ! -s $bed      ]]; then echo "$FUNCNAME error: bed file (2nd argument) not specified or does not exist"; return 42; fi
+  mem=${mem-:$[$(freemem)-2]}
+  java -Xmx${mem}g -jar $gatk3_2 -T DepthOfCoverage -R $REF --input_file $bam_file --intervals $bed --out $bam_file.DofC --omitIntervalStatistics --omitLocusTable --omitPerSampleStats --minBaseQuality 20 --minMappingQuality 30 --printBaseCounts #& pid=${!}
+  #while [[ $(ps|grep -c "^${pid} ") -eq 1 ]]; do if [[ $(freemem) -lt 2 ]]; then kill -9 $pid; else sleep 30; fi; done
+}
+
+runSomaticCalling() {
+  script_dir=$PIPELINE_HOME/soft/src/scripts
+  read DofC_file bed min_supporting_reads <<< $@
+  if [[ ! -s $DofC_file ]]; then echo "$FUNCNAME error: DofCfile (1st argument) not specified or does not exist"; return 42; fi
+  if [[ ! -s $bed  ]]; then echo "$FUNCNAME error: bed file (2nd argument) not specified or does not exist"; return 42; fi
+  if [[ -z $min_supporting_reads ]]; then echo "$FUNCNAME warning: min_supporting_reads (3rd argument) not specified. Using default value of 6 reads"; min_supporting_reads=6; fi
+  python $script_dir/parseDofC.py --input_file $DofC_file --bed_file $bed --min_supporting_reads $min_supporting_reads
+}
+
+runSomaticCallingOneStep() {
+  script_dir=$PIPELINE_HOME/soft/src/scripts
+  read bam_file bed min_supporting_reads mem <<< $@
+  if [[ ! -s $bam_file ]]; then echo "$FUNCNAME error: bam_file (1st argument) not specified or does not exist"; return 42; fi
+  if [[ ! -s $bed  ]]; then echo "$FUNCNAME error: bed file (2nd argument) not specified or does not exist"; return 42; fi
+  if [[ -z $min_supporting_reads ]]; then echo "$FUNCNAME warning: min_supporting_reads (4th argument) not specified. Using default value of 6 reads"; min_supporting_reads=6; fi
+  mem=${mem-:$[$(freemem)-2]}
+  >&2 echo "running java with ${mem}gb of memory"
+  java -Xmx${mem}g -jar $gatk -T DepthOfCoverage -R $REF --input_file $bam_file --intervals $bed --omitIntervalStatistics --omitLocusTable --omitPerSampleStats --minBaseQuality 20 --minMappingQuality 30 --printBaseCounts | python $script_dir/parseDofC.py --input_file - --bed_file $bed --min_supporting_reads $min_supporting_reads
+}
+
+###################
+# STATS FUNCTIONS #
+###################
+getCountsByMolecularTag() {
+  read sam <<< $@
+  if [[ ! -s $sam ]]; then echo "error: function $FUNCNAME requires non-empy molecular sam file as input"; return 42; fi
+  for i in $(awk -F"\t" '{for (i=1; i<=NF; i++) if ($i~/^RG:/) {gsub(/.*:/,"",$i); a[$i]++}}END{for (i in a ) print i}' $sam); do echo -e "$i\t$(grep -c $i $sam)"; done > $sam.molecular_tag_counts
+}
+
+getPoorPerformers() {
+  read runDir uniquePositionsBedFile <<< $@
+  unset failure
+  if [[ ! -d $runDir                 ]]; then echo "error: function $FUNCNAME requires a valid run directory as first argument"; failure=1; fi
+  if [[ ! -s $uniquePositionsBedFile ]]; then echo "error: function $FUNCNAME requires a non-empty bed file as second argument"; failure=1; fi
+  files=($(find $runDir/ -type f -name "DepthOfCoverage.*.mip.unique-positions.no_flank.sample_interval_summary"))
+  if [[ ${#files[@]} -eq 0 ]]; then echo "error: function $FUNCNAME requires at least one DepthOfCoverage mip.unique-positions.no_flank.sample_interval_summary file within"; failure=1; fi
+  if [[ $failure -eq 1 ]]; then echo "$FUNCNAME error"; return 42; fi
+  awk '{ if (NR==FNR) { if ($3-$2==1) {mips[$1":"$2+1]=$4} else {mips[$1":"$2+1"-"$3]=$4}; next}; if (FNR==1) files[FILENAME]++; data[FILENAME,$1]=$3 }END{ printf "mip"; for (file in files) printf "\t%s", file; printf "\n"; for (mip in mips) {printf "%s", mips[mip]; for (file in files) printf "\t%s", data[file,mip]; printf "\n"} }' $uniquePositionsBedFile ${files[@]} |sort -n > poor.performers/$runDir.poor_performers
+}
+
+getDepthAndUniqueTagCountsByMip() {
+#NOTE: this function is more or less obsoleted by getCountsByMolecularTag
+  read read2FastqGzFile targetingArms <<< $@
+  unset failure
+  if [[ ! -s $read2FastqGzFile ]]; then echo "error: function $FUNCNAME requires non-empty read2_fastq.gz file as first argument"; failure=1; fi
+  if [[ ! -s $targetingArms    ]]; then echo "error: function $FUNCNAME requires non-empty targeting arms file (format f_seq:r_seq:strand:mip_name) as second argument"; failure; fi
+  if [[ $failure -eq 1         ]]; then echo "$FUNCNAME error"; return 42; fi
+  RC() { perl -ne 'chomp $_; $RC=reverse($_); $RC=~tr/ACGT/TGCA/; print $RC' <(echo $1); }
+  for mip in $(cat $targetingArms ); do read f r s m <<< $(echo $mip|sed 's/:/ /g'); if [[  $s == "-"  ]]; then f=$(RC $f); r=$(RC $r); fi; echo -e "$mip\t$(zcat $read2FastqGzFile|grep -Pc "($f|$r)")\t$(zcat $read2FastqGzFile|grep -P "($f|$r)"|awk '{print substr($1,1,12)}'|sort|uniq|wc -l)"; done
+}
+
+testRun() {
+  read molecularBam uniquePositionsBedFile <<< $@
+  if [[ ! -s $molecularBam           ]]; then echo "error: function $FUNCNAME requires a non-empty molecular bam file as first argument"; failure=1; fi
+  if [[ ! -s $uniquePositionsBedFile ]]; then echo "error: function $FUNCNAME requires a non-empty bed file as second argument"; failure=1; fi
+  for i in $(sed 's/\t/:/g' $uniquePositionsBedFile); do read chr start end mip <<<$(echo $i|sed 's/:/ /g'); samtools view -F4 $molecularBam $chr:$start-$end|cut -f1 > $molecularBam.reads; sed 's/_.*//g' $molecularBam.reads |sort|uniq > $molecularBam.tags; ee "$mip\t$(grep -c "" $molecularBam.reads)\t$(grep -c "" $molecularBam.tags)\t$(for i in $(cat $molecularBam.tags); do grep -c $i $molecularBam.reads|tr '\n' ','; done|sed 's/,$//g')"; done
+  rm $molecularBam.{reads,tags}
+}
+
+getCountsByMipInBed() {
+#NOTE: this function is mostly used to identify worst offtarget-aligning mips, by using offtarget.bed
+#  for mip in $(cat $targetingArms ); do read f r s m <<< $(echo $mip|sed 's/:/ /g'); if [[  $s == "-"  ]]; then f=$(RC $f); r=$(RC $r); fi; echo -e "$mip\t$(samtools view -F4 -L $offTargetBed $bamFile|grep -cP "($f|$r)")"; done	#changed this line: now I always check for f,r and their reverse complements
+  read bamFile targetingArms offTargetBed <<< $@
+  unset failure
+  if [[ ! -s $bamFile       ]]; then echo "error: function $FUNCNAME requires non-empty bam file as first argument"; failure=1; fi
+  if [[ ! -s $targetingArms ]]; then echo "error: function $FUNCNAME requires non-empty targeting arms file (format f_seq:r_seq:strand:mip_name) as second argument"; failure=1; fi
+  if [[ ! -s $offTargetBed  ]]; then echo "error: function $FUNCNAME requires non-empty bed file as third argument"; failure=1; fi
+  if [[ $failure -eq 1      ]]; then echo "$FUNCNAME error"; return 42; fi
+  RC() { perl -ne 'chomp $_; $RC=reverse($_); $RC=~tr/ACGT/TGCA/; print $RC' <(echo $1); }
+  total=$(samtools view -c $bamFile); 
+  cat <(for mip in $(cat $targetingArms ); do read f r s m <<< $(echo $mip|sed 's/:/ /g'); F=$(RC $f); R=$(RC $r); echo -e "$mip\t$(samtools view -F4 -L $offTargetBed $bamFile|grep -cP "($f|$r|$F|$R)")"; done) <(ee "total_reads_from_sequencer\t$total")
+}
+
+getOnOffUnMappedPerSample() {
+  read bamfile onTargetBedfile offTargetBedfile <<<$@
+  unset failure
+  if [[ ! -s $bamfile 		]]; then echo "error: function $FUNCNAME requires non-empty bam file as first argument"; failure=1; fi
+  if [[ ! -s $onTargetBedfile 	]]; then echo "error: function $FUNCNAME requires non-empty on-target bed file as second argument"; failure=1; fi
+  if [[ ! -s $offTargetBedfile 	]]; then echo "error: functioff $FUNCNAME requires noff-empty off-target bed file as secoffd argument"; failure=1; fi
+  if [[ $failure -eq 1      	]]; then echo "$FUNCNAME error"; return 42; fi
+  echo -e "$bamfile\t$(samtools view -cF4 -L $onTargetBedfile $bamfile)\t$(samtools view -cF4 -L $offTargetBedfile $bamfile)\t$(samtools view -cf4 $bamfile)"
+}
+
+generateMipByMipFile() {
+  if [[ ! -d offtarget.performers ]]; then echo "you must run function $FUNCNAME from parent directory of offtarget.performers dir"; return 42; fi
+  for type in $@; do 
+    if [[ ! -d $type ]]; then echo "run directory $DIR does not exist. Skipping..."; continue; fi
+    cat <(echo mip) <(cut -f1 $(ls -1 offtarget.performers/$type.S?????*s|head -1)) > offtarget.performers/$type.mip-by-mip
+    for file in offtarget.performers/$type.S?????.*s; do 
+      paste offtarget.performers/$type.mip-by-mip <(cat <(echo $file|get_samples_S -) <(cut -f2 $file)) > $type.tmp
+      mv $type.tmp offtarget.performers/$type.mip-by-mip
+    done
+  done
+}
+
+# next 3 functions used for Sandra's follow-up analyses: they annotate mips by their overlap with other mips and coding exons. She will use this to help determine whether or not to remove a mip from the pool if it is a poor/offtarget performer
+helper_overlapOtherMips() {
+  read mip bed <<< $@
+  $bedops/bedmap --echo --count --bases-uniq-f --echo-map <(grep -P "\t$mip$" $bed) <(grep -vP "\t$mip$" $bed) | awk 'BEGIN{FS="|";OFS="\t"}{hits=""; split($1,a," "); split($4,b,";"); for (i in b) {gsub(/.*\t/,"",b[i]); if (b[i]!=a[4]) hits=b[i]";"hits}; print a[4],$3,hits}' | sed 's/;$//g'
+}
+
+helper_overlapCoding() {
+  read mip bed <<< $@
+  refGeneBed=$PIPELINE_HOME/data/targets/bed/RefSeq_coding_exons_genes.bed
+  $bedops/bedmap --echo --count --bases-uniq-f --echo-map <(grep -P "\t$mip$" $bed) $refGeneBed | awk 'BEGIN{FS="|";OFS="\t"}{hits=""; split($1,a," "); split($4,b,";"); for (i in b) {gsub(/.*\t/,"",b[i]); c[b[i]]++}; for (i in c) hits=i";"hits; print a[4],$3,hits}' | sed 's/;$//g'
+}
+
+annotateMipsForSandra() {
+  read bed <<< $@
+  if [[ ! -s $bed ]]; then echo "error: function $FUNCNAME requires non-empty bedfile as input"; return 42; fi
+  cat <(ee "mip\toverlapMipFull\tmip_ids\toverlapMipTarget\tmip_ids\toverlapCodingFull\tGene_name\toverlapCodingTarget\tGene_name") <(for mip in $(cut -f4 $bed); do ee "$mip\t$(helper_overlapOtherMips $mip $bed|cut -f2-)\t$(helper_overlapOtherMips $mip $bed.targets-only.bed|cut -f2-)\t$(helper_overlapCoding $mip $bed|cut -f2-)\t$(helper_overlapCoding $mip $bed.targets-only.bed|cut -f2-)"; done)
+}
+
+#functions for new MIP pipeline
+QINgenerateBySampleStats() {
+  . $PIPELINE_HOME/data/templates/link.runs.to.accessory_files.sh
+  if [[ ! -d $ANALYSIS_ROOT || ! -d $RAW_ROOT ]]; then echo "$FUNCNAME error: analysis and raw root dirs not defined. Did you run init function from $launch_wrapper?"; return 42; fi
+  RUN=$(basename $ANALYSIS_ROOT)
+  #if [[ ! -s ${LIST[$RUN]} ]]; then echo "$FUNCNAME error: run identifier $RUN does not have a sample LIST file"; return 42; fi
+  samples=$@
+  echo -e "run\tsample\ttotal\tw_mip\tgood_quality_reads_w_mip\tontarget\tofftarget\tunmapped"
+  #for s in $(cat ${LIST[$RUN]}); do 
+  for s in $samples; do 
+    read on off un <<< $(cat $ANALYSIS_ROOT/$s/*on_off_un*)
+    read aligned <<< $(awk '{if (NR==1) print $1}' $ANALYSIS_ROOT/$s/MIP.$s*flagstat)
+    read w_mip total <<< $(awk 'BEGIN{OFS="\t"}{wmip+=2*$5; tot+=2*$8}END{print wmip,tot}' $RAW_ROOT/$s/*report*)
+    echo -e "$RUN\t$s\t$total\t$w_mip\t$aligned\t$on\t$off\t$un"
+  done
+}
+
+generateBySampleStats() {
+  . $PIPELINE_HOME/data/templates/link.runs.to.accessory_files.sh
+  if [[ ! -d $ANALYSIS_ROOT || ! -d $RAW_ROOT ]]; then echo "$FUNCNAME error: analysis and raw root dirs not defined. Did you run init function from $launch_wrapper?"; return 42; fi
+  RUN=$(basename $ANALYSIS_ROOT)
+  if [[ ! -s ${LIST[$RUN]} ]]; then echo "$FUNCNAME error: run identifier $RUN does not have a sample LIST file"; return 42; fi
+  echo -e "run\tsample\ttotal\tw_mip\tgood_quality_reads_w_mip\tontarget\tofftarget\tunmapped"
+  for s in $(cat ${LIST[$RUN]}); do 
+    read on off un <<< $(cat $ANALYSIS_ROOT/$s/I*/G*/*on_off_un*)
+    read aligned <<< $(awk '{if (NR==1) print $1}' $ANALYSIS_ROOT/$s/I*/G*/MIP.$s*flagstat)
+    read w_mip total <<< $(awk 'BEGIN{OFS="\t"}{wmip+=2*$5; tot+=2*$8}END{print wmip,tot}' $RAW_ROOT/$s/I*/R*/*report*)
+    echo -e "$RUN\t$s\t$total\t$w_mip\t$aligned\t$on\t$off\t$un"
+  done
+}
+
+generateByMipStats() {
+  unset use_files
+  script=$PIPELINE_HOME/soft/src/scripts/QC.by-mip.stats.py
+  if [[ $# -eq 0 ]]; then python $script $(find * -name "*-by-*"); return; fi
+  use_files=0
+  for i in $@; do if [[ ! -d $i ]]; then use_files=1; fi; done
+  if [[ $use_files -eq 1 ]]; then files=$@; else files=$(for i in $@; do find $i/*/I*/ -name "*mip-by-mip_counts"; done); fi
+  python $script $files
+}
+
+generateMolecularTagStats() {
+  script=$PIPELINE_HOME/soft/src/scripts/generateMolecularTagStats.py
+  unset bedArg bams
+  if [[ $1 =~ bed$ ]]; then bedArg="--bed $1"; shift; fi
+  read bams <<< $@
+  python $script $bedArg $(for i in $bams; do printf " -m %s " $i; done|sed 's/,$//g')
+}
+
+# one-stop function for all standard MIP QC, using STATS folders in pipeline_results
+generateAllStandardMIPQC() {
+  echo >&2 "usage: $FUNCNAME [*full path* to all STATS folders in pipeline_results for you list of samples]"
+  unset failure
+  if [[ ! -d $PIPELINE_HOME ]]; then echo >&2 "ERROR: you must set the PIPELINE_HOME variable to point to the MIP pipeline home"; failure=1; fi
+  for i in $@; do if [[ ! -d $i ]]; then echo >&2 "ERROR: STATS directory $i does not exist"; failure=1; fi; done
+  if [[ $failure -eq 1 ]]; then echo >&2 "errors found. exiting $FUNCNAME"; return 42; fi
+  echo -e "run\tsample\ttotal\tw_mip\tgood_quality_reads_w_mip\tontarget\tofftarget\tunmapped" > MIP_QC.on_off_unmapped
+  for dir in $@; do
+    unset failure
+    reports=($(ls -1 $dir/*preprocessing_report.txt 2>/dev/null)); if [[ ${#reports[@]} -eq 0 ]]; then echo >&2 "report file missing from STATS directory $dir"; failure=1; fi
+    flagstat=$(ls -1 $dir/*flagstat 2>/dev/null); if [[ ! -s $flagstat ]]; then echo >&2 "flagstat file missing from STATS directory $dir"; failure=1; fi
+    on_off_unmapped=$(ls -1 $dir/*on_off_unmapped 2>/dev/null); if [[ ! -s $on_off_unmapped ]]; then echo >&2 "on_off_unmapped file missing from STATS directory $dir"; failure=1; fi
+    mip_counts=$(ls -1 $dir/*mip-by-mip_counts 2>/dev/null); if [[ ! -s $mip_counts ]]; then echo >&2 "mip_counts file missing from STATS directory $dir"; failure=1; fi
+    #if [[ $failure -eq 1 ]]; then echo >&2 "exiting $FUNCNAME with errors"; return 42; fi
+    if [[ $failure -eq 1 ]]; then echo >&2 "skipping dir $dir"; continue; fi
+    read RUN s <<< $(echo $dir|cut -d/ -f9-10|tr '/' ' ')
+    read on off un <<< $(cat $on_off_unmapped)
+    read aligned <<< $(awk '{if (NR==1) print $1}' $flagstat)
+    read w_mip total <<< $(awk 'BEGIN{OFS="\t"}{wmip+=2*$5; tot+=2*$8}END{print wmip,tot}' ${reports[@]})
+    echo -e "$RUN\t$s\t$total\t$w_mip\t$aligned\t$on\t$off\t$un"
+  done >> MIP_QC.on_off_unmapped
+  all_counts_files=$(if [[ $# -eq 1 ]]; then ls -1 $mip_counts; else eval ls -1 $(list $@)/*mip-by-mip_counts; fi)
+  eval python $PIPELINE_HOME/soft/src/scripts/QC.by-mip.stats.py $all_counts_files > MIP_QC.mip-by-mip
+}
+
+addMedianTotalValuesToMipByMipStats() {
+  awk 'BEGIN{FS=OFS="\t"}{
+    if (NR==1) {
+      onS=0; onE=0; offS=0; offE=0; unS=0; unE=0
+      for (i=2; i<=NF; i++) {
+        if ($i == "on")       {if (onS==0) onS=i; onE=i}
+        else if ($i == "off") {if (offS==0) offS=i; offE=i}
+        else if ($i == "un")  {if (unS==0) unS=i; unE=i}
+        else {break}
+      }
+      print "onMED","onTOT","offMED","offTOT","unMED","unTOT",$0
+      next
+    }
+    if (NR==2) {print "onMED","onTOT","offMED","offTOT","unMED","unTOT",$0; next}
+    onMED=0; onTOT=0; offMED=0; offTOT=0; unMED=0; unTOT=0
+    delete ON; delete OFF; delete UN
+    for (i=onS; i<=onE; i++) {ON[i]=$i; onTOT+=$i}
+    for (i=offS; i<=offE; i++) {OFF[i]=$i; offTOT+=$i}
+    for (i=unS; i<=unE; i++) {UN[i]=$i; unTOT+=$i}
+    c=length(ON)
+    asort(ON); asort(OFF); asort(UN)
+    onMED=ON[int(c/2)]; offMED=OFF[int(c/2)]; unMED=UN[int(c/2)]
+    print onMED,onTOT,offMED,offTOT,unMED,unTOT,$0
+  }' $1
+}
+
+addCallabilityValuesToMipByMipStats() {
+  rm .tmp_header .tmp_output
+  mip_by_mip=$1; shift
+  callability_files=($@)
+  col=$(head -1 $mip_by_mip | awk -F"\t" '{for (i=1; i<=NF; i++) print i"\t"$i}'|grep -P "\t$"|cut -f1)
+  awk 'BEGIN{FS=OFS="\t"}{
+        if (NR==FNR) {
+            if (FNR==1) for (i=1; i<=NF; i++) if ($i=="") col=i
+            output[$col]=$0
+        }
+        else if (FNR==1) {
+            c++
+            match(FILENAME,/S[0-9][0-9][0-9][0-9][0-9]/)
+            sample=substr(FILENAME,RSTART,RLENGTH)
+            samples[c]=sample
+        }
+        callability[$1":"c]=$5
+    }END{
+        callHeader="callability"; sampleStr=samples[1]; 
+        for (i=2; i<=c; i++) {sampleStr=sampleStr"\t"samples[i]; callHeader=callHeader"\tcallability"}
+        print callHeader,output[""] > ".tmp_header"; delete output[""]
+        print sampleStr,output["mip"] >> ".tmp_header"; delete output["mip"]
+        for (i in output) {
+            if (output[i]) {
+                calls=callability[i":"1]
+                for (s=2; s<=c; s++) calls=calls"\t"callability[i":"s]
+                print calls,output[i] >> ".tmp_output"
+            }
+        }
+    }' $mip_by_mip ${callability_files[@]}
+  cat .tmp_header <(sort -t$'\t' -nk$[$col+${#callability_files[@]}] .tmp_output)
+  rm .tmp_header .tmp_output
+}
+
+generateAllExtendedMipQC() {
+  echo >&2 "usage: $FUNCNAME [run name] [*full path* to all STATS folders in pipeline_results for you list of samples]"
+  unset failure
+  if [[ ! -d $PIPELINE_HOME ]]; then echo >&2 "ERROR: you must set the PIPELINE_HOME variable to point to the MIP pipeline home"; failure=1; fi
+  for i in $@; do if [[ ! -d $i ]]; then echo >&2 "ERROR: STATS directory $i does not exist"; failure=1; fi; done
+  if [[ $failure -eq 1 ]]; then echo >&2 "errors found. exiting $FUNCNAME"; return 42; fi
+  echo -e "run\tsample\ttotal\tw_mip\tgood_quality_reads_w_mip\tontarget\tofftarget\tunmapped" > MIP_QC.on_off_unmapped
+  for dir in $@; do
+    unset failure
+    reports=($(ls -1 $dir/*preprocessing_report.txt 2>/dev/null)); if [[ ${#reports[@]} -eq 0 ]]; then echo >&2 "report file missing from STATS directory $dir"; failure=1; fi
+    flagstat=$(ls -1 $dir/*flagstat 2>/dev/null); if [[ ! -s $flagstat ]]; then echo >&2 "flagstat file missing from STATS directory $dir"; failure=1; fi
+    on_off_unmapped=$(ls -1 $dir/*on_off_unmapped 2>/dev/null); if [[ ! -s $on_off_unmapped ]]; then echo >&2 "on_off_unmapped file missing from STATS directory $dir"; failure=1; fi
+    mip_counts=$(ls -1 $dir/*mip-by-mip_counts 2>/dev/null); if [[ ! -s $mip_counts ]]; then echo >&2 "mip_counts file missing from STATS directory $dir"; failure=1; fi
+    #if [[ $failure -eq 1 ]]; then echo >&2 "exiting $FUNCNAME with errors"; return 42; fi
+    if [[ $failure -eq 1 ]]; then echo >&2 "skipping dir $dir"; continue; fi
+    read RUN s <<< $(echo $dir|cut -d/ -f10-11|tr '/' ' ')
+    read on off un <<< $(cat $on_off_unmapped)
+    read aligned <<< $(awk '{if (NR==1) print $1}' $flagstat)
+    read w_mip total <<< $(awk 'BEGIN{OFS="\t"}{wmip+=2*$5; tot+=2*$8}END{print wmip,tot}' ${reports[@]})
+    echo -e "$RUN\t$s\t$total\t$w_mip\t$aligned\t$on\t$off\t$un"
+  done >> MIP_QC.on_off_unmapped
+  all_counts_files=$(if [[ $# -eq 1 ]]; then ls -1 $mip_counts; else eval ls -1 $(list $@)/*mip-by-mip_counts; fi)
+  eval python2 $PIPELINE_HOME/soft/src/scripts/QC.by-mip.stats.py $all_counts_files > MIP_QC.mip-by-mip
+  addMedianTotalValuesToMipByMipStats MIP_QC.mip-by-mip > .tmp
+  eval addCallabilityValuesToMipByMipStats .tmp $(list $@)/*Callability.bed > MIP_QC.mip-by-mip
+  rm .tmp
+  bash $PIPELINE_HOME/soft/src/scripts/generateMipByMipSummary.sh > MIP_QC.mip-by-mip.summary
+}

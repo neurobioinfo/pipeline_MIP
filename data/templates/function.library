@@ -1,0 +1,711 @@
+#!/bin/bash
+
+##########################################
+## GLOBAL CONSTANTS
+## initialized in the init_pipeline
+##########################################
+
+##########################################
+## GLOBAL VARIABLES
+##########################################
+FUNCTION_LIBRARY_INIT=0
+
+sample_init() {
+############################################
+# Init
+echo "*** INITIALIZE SAMPLE'S VARIABLES"
+#############################################
+SAMPLE=$1
+RUN_DIR=$2
+if [[ -z $SAMPLE || -z $RUN_DIR ]]; then echo "sample_init (SAMPLE,RUN_DIR) missing args"; return 42; fi
+export SAMPLE RUN_DIR;
+export FUNCTION_LIBRARY_INIT=1;
+export TEMP_DIR=$RUN_DIR/temp
+export VERBOSE=0
+
+mkdir $TEMP_DIR 2>/dev/null
+return 0
+}
+
+set_verbose() {
+############################################
+# set_verbose
+echo "*** SET VERBOSE TO \"$1\""
+#############################################
+export VERBOSE=$1
+return 0
+}
+
+conda_init() { 
+    # beluga-specific function required for custom python programs in the mip pipeline (parts 0_1 and 3_1)
+    __conda_setup="$('/lustre03/project/6001220/COMMON/soft/packages/anaconda/bin/conda' 'shell.bash' 'hook' 2> /dev/null)";
+    if [ $? -eq 0 ]; then
+        eval "$__conda_setup";
+    else
+        if [ -f "/lustre03/project/6001220/COMMON/soft/packages/anaconda/etc/profile.d/conda.sh" ]; then
+            . "/lustre03/project/6001220/COMMON/soft/packages/anaconda/etc/profile.d/conda.sh";
+        else
+            export PATH="/lustre03/project/6001220/COMMON/soft/packages/anaconda/bin:$PATH";
+        fi;
+    fi;
+    unset __conda_setup
+}
+
+sample_identify_reads_preprocessing_MIPs() {
+###################################################
+# Data Pre Processing
+echo "*** RUNNING SAMPLE MIP PREPROCESSING: IDENTIFY READS"
+###################################################
+  echo "*** RUNNING SAMPLE MIP PREPROCESSING: IDENTIFY READS";
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+      echo "INIT SAMPLE FIRST";
+      return 42;
+  fi;
+  cd $RUN_DIR;
+  local FASTQ1=$1;
+  local FASTQ2=$2;
+  local MIP_DESIGN_FILE=$3;
+  local MIP_DESIGN_SOURCE=$4;
+  local MOLECULAR_TAG_LENGTH=$5;
+  local TAGGED_READ_NUMBER=$6;
+  local script_dir=$PIPELINE_HOME/soft/src/mip_pipeline_python;
+  if [[ -z $FASTQ1 || -z $FASTQ2 || -z $MIP_DESIGN_FILE ]]; then
+      echo "$FUNCNAME (FASTQ1,FASTQ2,MIP_DESIGN_FILE) missing args";
+  fi;
+  if [[ ! -e $FASTQ1 || ! -e $FASTQ2 ]]; then
+      echo "$FUNCNAME() FASTQ file $FASTQ1 or $FASTQ2 not found";
+      return 42;
+  fi;
+  if [[ ! -e $MIP_DESIGN_FILE ]]; then
+      echo "$FUNCNAME() MIP_DESIGN_FILE not found";
+      return 42;
+  fi;
+  cmd="python $script_dir/PreAlignmentProcessing.py --read1_fastq_file $FASTQ1 --read2_fastq_file $FASTQ2 --design_file $MIP_DESIGN_FILE --design_source $MIP_DESIGN_SOURCE --molecular_tag_length $MOLECULAR_TAG_LENGTH --tagged_read_number $TAGGED_READ_NUMBER";
+  echo "****** LAUNCHING IDENTIFY READS";
+  if [ $VERBOSE ]; then
+      echo -e "****** $FUNCNAME CMD\n$cmd";
+  fi;
+  $cmd;
+  if [ $? -ne 0 ]; then
+      echo "$FUNCNAME() problem";
+      return 42;
+  fi;
+  return $?
+}
+
+sample_preprocessing_somatic_MIPs() {
+###################################################
+# Data Pre Processing
+echo "*** RUNNING SAMPLE MIP PREPROCESSING: IDENTIFY READS"
+###################################################
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+      echo "INIT SAMPLE FIRST";
+      return 42;
+  fi;
+  cd $RUN_DIR;
+  local FASTQ1=$1;
+  local FASTQ2=$2;
+  local MIP_DESIGN_FILE=$3;
+  local MIP_DESIGN_SOURCE=$4;
+  local CONSENSUS_FASTQ_PREFIX=$5
+  local MOLECULAR_TAG_LENGTH=$6;
+  local TAGGED_READ_NUMBER=$7;
+  local MIP_KEY_LENGTH=$8
+  local SOMATIC_PROCESSING_THREADS=$9
+  local script_dir=$PIPELINE_HOME/soft/src/mip_pipeline_python;
+  if [[ -z $FASTQ1 || -z $FASTQ2 || -z $MIP_DESIGN_FILE ]]; then echo "$FUNCNAME (FASTQ1,FASTQ2,MIP_DESIGN_FILE) missing args"; fi
+  if [[ ! -s $FASTQ1 || ! -s $FASTQ2 ]]; then echo "$FUNCNAME() FASTQ file $FASTQ1 or $FASTQ2 not found, empty or not specified"; return 42; fi
+  if [[ ! -s $MIP_DESIGN_FILE ]]; then echo "$FUNCNAME() MIP_DESIGN_FILE not found, empty or not specified"; return 42; fi
+  if [[ -z $MIP_DESIGN_SOURCE ]]; then echo "$FUNCNAME() MIP_DESIGN_SOURCE not found"; return 42; fi
+  if [[ -z $CONSENSUS_FASTQ_PREFIX ]]; then echo "$FUNCNAME() CONSENSUS_FASTQ_PREFIX not specified"; return 42; fi
+  if [[ -n $MIP_KEY_LENGTH && ! $MIP_KEY_LENGTH =~ ^[1-9][0-6]*$ ]]; then echo "$FUNCNAME() MIP_KEY_LENGTH must be an integer from 1-16 (found \"$MIP_KEY_LENGTH\")"; return 42; fi
+  SOMATIC_PROCESSING_THREADS=${SOMATIC_PROCESSING_THREADS:-11}
+  cmd="python $script_dir/PreAlignmentProcessing_somatic.py --read1_fastq_file $FASTQ1 --read2_fastq_file $FASTQ2 --design_file $MIP_DESIGN_FILE --design_source $MIP_DESIGN_SOURCE --molecular_tag_length $MOLECULAR_TAG_LENGTH --tagged_read_number $TAGGED_READ_NUMBER --mip_key_length $MIP_KEY_LENGTH --output $CONSENSUS_FASTQ_PREFIX --threads $SOMATIC_PROCESSING_THREADS --min_reads_per_mol 6 --min_qual_per_base 13";
+  echo "****** LAUNCHING IDENTIFY READS";
+  if [ $VERBOSE ]; then
+      echo -e "****** $FUNCNAME CMD\n$cmd";
+  fi;
+  $cmd;
+  if [ $? -ne 0 ]; then
+      echo "$FUNCNAME() problem";
+      return 42;
+  fi;
+  return $?
+}
+
+sample_trimmomatic_preprocessing_w_outputs_MIPs() {
+###################################################
+# Data Pre Processing
+echo "*** RUNNING SAMPLE MIP TRIMMOMATIC PREPROCESSING"
+###################################################
+  echo "*** RUNNING SAMPLE MIP TRIMMOMATIC PREPROCESSING";
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+      echo "INIT SAMPLE FIRST";
+      return 42;
+  fi;
+  cd $RUN_DIR;
+  local FASTQ1=$1;
+  local FASTQ2=$2;
+  local TRIM_PAIRED_FASTQ1=$3;
+  local TRIM_PAIRED_FASTQ2=$4;
+  local ENCODING=$5;
+  local FASTQC_OUTPUT_DIR=$6;
+  local ADAPTERS=$7
+  if [[ ! -a $FASTQ1 || ! -a $FASTQ2 || `dirname $FASTQ1` != `dirname $FASTQ2` || -z $ENCODING || -z $FASTQC_OUTPUT_DIR || -z $TRIM_PAIRED_FASTQ1 || -z $TRIM_PAIRED_FASTQ2 ]]; then
+      echo "sample_trimmomatic_preprocessing_w_outputs_MIPs (FASTQ1,FASTQ2,TRIM_PAIRED_FASTQ1,TRIM_PAIRED_FASTQ2,ENCODING,FASTQC_OUTPUT_DIR) missing args";
+      return 42;
+  fi;
+  if [[ ! -e $FASTQ1 || ! -e $FASTQ2 ]]; then
+      echo "sample_trimmomatic_preprocessing() FASTQ file $FASTQ1 or $FASTQ2 not found";
+      return 42;
+  fi;
+  if [[ $ENCODING != 33 && $ENCODING != 64 ]]; then
+      echo "sample_trimmomatic_preprocessing() encoding must be 33 or 64";
+      return 42;
+  fi;
+  if [[ $ADAPTERS ]]; then
+      if [[ ! -e $ADAPTERS ]]; then
+        echo "$FUNCNAME() ADAPTERS file $ADAPTERS not found"; return 42;
+      else
+         local ADAPTERSARG="ILLUMINACLIP:${ADAPTERS}:2:40:15"
+      fi
+  fi
+  echo "****** LAUNCHING CLIP/TRIM/CONVERT ON BOTH READ FILES";
+  cmd1="java -Xmx${JAVA_MEM}g -Djava.io.tmpdir=${TEMP_DIR}   -classpath $TRIMMOMATIC_JAR org.usadellab.trimmomatic.TrimmomaticPE \
+       -threads $THREADS \
+       -phred${ENCODING} \
+       $FASTQ1 $FASTQ2 \
+       ${TRIM_PAIRED_FASTQ1}   ${TRIM_UNPAIRED_FASTQ1}   ${TRIM_PAIRED_FASTQ2}   ${TRIM_UNPAIRED_FASTQ2} \
+       TOPHRED33 \
+       LEADING:3 \
+       TRAILING:3 \
+       SLIDINGWINDOW:4:15 \
+       MINLEN:36 \
+       $ADAPTERSARG"
+  if [ $VERBOSE ]; then echo -e "****** sample_trimmomatic_preprocessing CMD\n$cmd"; fi && $cmd1
+  if [ $? -ne 0 ]; then echo "sample_trimmomatic_preprocessing() problem with TrimmomaticPE"; return 42; fi
+  echo "****** GENERATING FASTQC QUALITY REPORTS";
+  cmd2="fastqc -o $FASTQC_OUTPUT_DIR -t 6   $FASTQ1   $FASTQ2   ${TRIM_PAIRED_FASTQ1}   ${TRIM_PAIRED_FASTQ2}"
+  mkdir -p $FASTQC_OUTPUT_DIR;
+  if [ $VERBOSE ]; then echo -e "****** sample_trimmomatic_preprocessing CMD\n$cmd2"; fi && $cmd2
+  return $?
+}
+
+sample_BWA_alignMemPE_MIPs() {
+#################################################
+# BWA Alignment
+echo "*** RUNNING BWA MEM PE ALIGNMENT FOR MIPs (stricter mismatch penalty)"
+#################################################
+  echo "*** RUNNING BWA MEM PE ALIGNMENT FOR MIPs (stricter mismatch penalty)";
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+      echo "INIT SAMPLE FIRST";
+      return 42;
+  fi;
+  cd $RUN_DIR;
+  local FASTQ1=$1;
+  local FASTQ2=$2;
+  local SAM=$3;
+  local THREADS=$4;
+  local BWA_REF=$5;
+  local RG=$6;
+  if [[ -z $FASTQ1 || -z $FASTQ2 || -z $SAM || -z $THREADS || -z $BWA_REF || -z $RG ]]; then
+      echo "sample_BWA_alignMemPE_MIPs (FASTQ1,FASTQ2,SAM,THREADS,BWA_REF,RG) missing args";
+      return 42;
+  fi;
+  if [ $VERBOSE ]; then
+      echo -e "****** sample_BWA_alignMemPE_MIPs CMD\n$BWA_MEM_DIR/bwa mem -M -R $RG -t $THREADS $BWA_REF $FASTQ1 $FASTQ2   1> $SAM   2> $SAM.bwa_mem_pe.stderr";
+  fi;
+  $BWA_MEM_DIR/bwa mem -M -R $RG -t $THREADS $BWA_REF $FASTQ1 $FASTQ2 > $SAM 2> $SAM.bwa_mem_pe.stderr;
+  return $?
+}
+
+sample_BWA_alignMemSE_MIPs() {
+#################################################
+# BWA Alignment
+echo "*** RUNNING BWA MEM SE ALIGNMENT FOR SOMATIC MIPs (using somatic consensus reads)"
+#################################################
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+      echo "INIT SAMPLE FIRST";
+      return 42;
+  fi;
+  cd $RUN_DIR;
+  local FASTQ=$1;
+  local SAM=$2;
+  local THREADS=$3;
+  local BWA_REF=$4;
+  local RG=$5;
+  if [[ -z $FASTQ || -z $SAM || -z $THREADS || -z $BWA_REF || -z $RG ]]; then
+      echo "$FUNCNAME (FASTQ,SAM,THREADS,BWA_REF,RG) missing args";
+      return 42;
+  fi;
+  if [ $VERBOSE ]; then
+      echo -e "****** $FUNCNAME() CMD\n$BWA_MEM_DIR/bwa mem -a -M -R $RG -t $THREADS $BWA_REF $FASTQ > $SAM 2> $SAM.bwa_mem_se.stderr"
+  fi;
+  $BWA_MEM_DIR/bwa mem -a -M -R $RG -t $THREADS $BWA_REF $FASTQ > $SAM 2> $SAM.bwa_mem_se.stderr
+  return $?
+}
+
+sample_remove_non_primary_aln() {
+##############################################################
+# Remove non primary alignment reads from the bam 
+# file. Tag from the read (256) used to filter.
+echo "*** RUNNING REMOVE NON PRIMARY ALN"
+##############################################################
+if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then echo "INIT SAMPLE FIRST"; return 42; fi
+cd $RUN_DIR
+INPUT=$1
+OUTPUT=$2
+
+if [[ -z $INPUT || -z $OUTPUT ]]; then echo "sample_remove_non_primary_aln (INPUT,OUTPUT) missing args"; return 42; fi
+
+INPUT=`echo $INPUT | sed 's/@/ /g'`
+
+if [ $VERBOSE ]; then echo -e "****** sample_remove_non_primary_aln samtools view CMD\n\
+samtools view -bh -F 256 -o $OUTPUT $INPUT"
+fi
+samtools view -bh -F 256 -o $OUTPUT $INPUT
+if [ $? -ne 0 ]; then echo "sample_remove_non_primary_aln() problem with samtools view"; return 42; fi
+
+if [ $VERBOSE ]; then echo -e "****** sample_remove_non_primary_aln samtools index CMD\n\
+samtools index $OUTPUT"
+fi
+samtools index $OUTPUT
+if [ $? -ne 0 ]; then echo "sample_remove_non_primary_aln() problem with samtools index"; return 42; fi
+
+}
+
+sample_keep_non_primary_aln() {
+##############################################################
+# Only keep the non primary alignment reads from the bam 
+# file. Tag from the read (256) used to filter.
+echo "*** RUNNING KEEP NON PRIMARY ALN"
+##############################################################
+if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then echo "INIT SAMPLE FIRST"; return 42; fi
+cd $RUN_DIR
+INPUT=$1
+OUTPUT=$2
+
+if [[ -z $INPUT || -z $OUTPUT ]]; then echo "sample_keep_non_primary_aln (INPUT,OUTPUT) missing args"; return 42; fi
+
+INPUT=`echo $INPUT | sed 's/@/ /g'`
+
+if [ $VERBOSE ]; then echo -e "****** sample_keep_non_primary_aln samtools view CMD\n\
+samtools view -bh -f 256 -o $OUTPUT $INPUT"
+fi
+samtools view -bh -f 256 -o $OUTPUT $INPUT
+if [ $? -ne 0 ]; then echo "sample_keep_non_primary_aln() problem with samtools view"; return 42; fi
+
+if [ $VERBOSE ]; then echo -e "****** sample_keep_non_primary_aln samtools index CMD\n\
+samtools index $OUTPUT"
+fi
+samtools index $OUTPUT
+if [ $? -ne 0 ]; then echo "sample_keep_non_primary_aln() problem with samtools index"; return 42; fi
+
+}
+
+sample_mergeSort_BAMs() {
+#################################################
+# Merge BAM Alignments
+#     $INPUT, a.k.a. $1, must be a STRING like : "INPUT=file1@INPUT=file2..."
+echo "*** RUNNING BAMs MERGE + SORT"
+#################################################
+if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then echo "INIT SAMPLE FIRST"; return 42; fi
+cd $RUN_DIR
+INPUT=$1
+OUTPUT=$2
+let MAX_RECORDS_IN_RAM_VALUE=$MAX_MEM*200000 # MAX_RECORDS_IN_RAM=(qscript.maxMemoryLimit * 250000 * 0.8).toInt
+
+if [[ -z $INPUT || -z $OUTPUT ]]; then echo "sample_mergeSort_BAMs (INPUT,OUTPUT) missing args"; return 42; fi
+
+INPUT=`echo $INPUT | sed 's/@/ /g'`
+
+if [ $VERBOSE ]; then echo -e "****** sample_mergeSort_BAMs CMD\n\
+java -Xmx${MAX_MEM}g -Djava.io.tmpdir=$TEMP_DIR \
+  -jar $PICARD_DIR/MergeSamFiles.jar \
+  TMP_DIR=$TEMP_DIR \
+  $INPUT \
+  OUTPUT=$OUTPUT \
+  USE_THREADING=TRUE \
+  CREATE_INDEX=TRUE \
+  MAX_RECORDS_IN_RAM=$MAX_RECORDS_IN_RAM_VALUE \
+  COMPRESSION_LEVEL=0"
+fi
+
+java -Xmx${MAX_MEM}g -Djava.io.tmpdir=$TEMP_DIR \
+  -jar $PICARD_DIR/MergeSamFiles.jar \
+  VALIDATION_STRINGENCY=SILENT \
+  TMP_DIR=$TEMP_DIR \
+  $INPUT \
+  OUTPUT=$OUTPUT \
+  USE_THREADING=TRUE \
+  CREATE_INDEX=TRUE \
+  MAX_RECORDS_IN_RAM=$MAX_RECORDS_IN_RAM_VALUE \
+  COMPRESSION_LEVEL=0 
+
+return $?
+}
+
+sample_GATK_data_processing_noalign_MIPs() {
+#####################################################
+# Data Processing
+echo "*** RUNNING GATK DATA PROCESSING PIPELINE"
+#####################################################
+  echo "*** RUNNING GATK DATA PROCESSING PIPELINE";
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+      echo "INIT SAMPLE FIRST";
+      return 42;
+  fi;
+  cd $RUN_DIR;
+  local ALIGNED_BAM=$1;
+  local PROJECT_NAME=$2;
+  local REF_ALIGN=$3;
+  local USE_INDELS=$4;
+  local START_FROM_SCRATCH=$5;
+  local KEEP_INTERMEDIATES=$6;
+  local COMMAND_INDELS=;
+  local COMMAND_START_FROM_SCRATCH=;
+  local COMMAND_KEEP_INTERMEDIATES=;
+  if [[ -z $PROJECT_NAME || -z $REF_ALIGN || -z $USE_INDELS || -z $START_FROM_SCRATCH || -z $KEEP_INTERMEDIATES ]]; then
+      echo "sample_GATK_data_processing_noalign_MIPs (ALIGNED_BAM,PROJECT_NAME,REF_ALIGN,USE_INDELS,START_FROM_SCRATCH,KEEP_INTERMEDIATES) missing args";
+      return 42;
+  fi;
+  if [[ ! -e $ALIGNED_BAM ]]; then
+      echo "sample_GATK_data_processing_noalign_MIPs() $ALIGNED_BAM not found";
+      return 42;
+  fi;
+  if [[ ! -e ${MIP_POST_PROCESSING_SCALA} ]]; then
+      echo "sample_GATK_data_processing_noalign_MIPs() ${MIP_POST_PROCESSING_SCALA} not found";
+      return 42;
+  fi;
+  if [[ -z $JAVA_MEM ]]; then
+      echo "sample_GATK_data_processing_noalign_MIPs() JAVA_MEM unset";
+      return 42;
+  fi;
+  if [[ -z $MAX_MEM ]]; then
+      echo "sample_GATK_data_processing_noalign_MIPs() MAX_MEM unset";
+      return 42;
+  fi;
+  if [[ -z $THREADS ]]; then
+      echo "sample_GATK_data_processing_noalign_MIPs() THREADS unset";
+      return 42;
+  fi;
+  if [[ -z $TEMP_DIR ]]; then
+      echo "sample_GATK_data_processing_noalign_MIPs() TEMP_DIR";
+      return 42;
+  fi;
+  if [[ -z $GATK_KEY ]]; then
+      echo "sample_GATK_data_processing_noalign_MIPs() GATK_KEY unset";
+      return 42;
+  fi;
+  if [[ -z $DBSNP ]]; then
+      echo "sample_GATK_data_processing_noalign_MIPs() DBSNP unset";
+      return 42;
+  fi;
+  if [[ $USE_INDELS -eq 1 ]]; then
+      COMMAND_INDELS="--extra_indels $INDELS";
+  fi;
+  if [[ $START_FROM_SCRATCH -eq 1 ]]; then
+      COMMAND_START_FROM_SCRATCH="--start_from_scratch";
+  fi;
+  if [[ $KEEP_INTERMEDIATES -eq 1 ]]; then
+      COMMAND_KEEP_INTERMEDIATES="--keep_intermediate_outputs";
+  fi;
+  DATE=`date +%F`;
+  if [ $VERBOSE ]; then
+      echo -e "****** sample_GATK_data_processing_noalign_MIPs CMD\njava -Xmx${JAVA_MEM}g -Djava.io.tmpdir=$TEMP_DIR -jar $GATK_DIR/dist/Queue.jar   --script ${MIP_POST_PROCESSING_SCALA}   --max_memory_limit $MAX_MEM   --procs_per_node $THREADS   --temp_directory $TEMP_DIR   --input $ALIGNED_BAM   --key $GATK_KEY   --reference $REF_ALIGN   --dbsnp $DBSNP   $COMMAND_INDELS   --project $PROJECT_NAME   $COMMAND_START_FROM_SCRATCH   $COMMAND_KEEP_INTERMEDIATES   --retry_failed 10   -l DEBUG   --log_to_file ${PROJECT_NAME}.DataProcessingPipeline.${DATE}.log.txt   --jobReport ${PROJECT_NAME}.DataProcessingPipeline.${DATE}.jobreport.txt   -run";
+  fi;
+  java -Xmx${JAVA_MEM}g -Djava.io.tmpdir=$TEMP_DIR -jar $GATK_DIR/dist/Queue.jar --script ${MIP_POST_PROCESSING_SCALA} --max_memory_limit $MAX_MEM --procs_per_node $THREADS --temp_directory $TEMP_DIR --input $ALIGNED_BAM --key $GATK_KEY --reference $REF_ALIGN --dbsnp $DBSNP $COMMAND_INDELS --project $PROJECT_NAME $COMMAND_START_FROM_SCRATCH $COMMAND_KEEP_INTERMEDIATES --retry_failed 10 -l DEBUG --log_to_file ${PROJECT_NAME}.DataProcessingPipeline.${DATE}.log.txt --jobReport ${PROJECT_NAME}.DataProcessingPipeline.${DATE}.jobreport.txt -run;
+  return $?
+}
+
+sample_metrics_coverageStats_MIPs() {
+###################################################
+# Stats - by-mip and global coverage
+echo "*** Generating statistics (global and by-mip coverage)"
+###################################################
+  echo "*** Generating statistics (global and by-mip coverage)";
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+      echo "INIT SAMPLE FIRST";
+      return 42;
+  fi;
+  cd $RUN_DIR;
+  local BAM=$1;
+  local MIP_DESIGN_FILE=$2;
+  local MIP_DESIGN_SOURCE=$3;
+  local script_dir=$PIPELINE_HOME/soft/src/mip_pipeline_python;
+  if [[ -z $BAM || -z $MIP_DESIGN_FILE || -z $MIP_DESIGN_SOURCE ]]; then
+      echo "$FUNCNAME (BAM,MIP_DESIGN_FILE,MIP_DESIGN_SOURCE) missing args";
+  fi;
+  if [[ ! -e $BAM ]]; then
+      echo "$FUNCNAME() BAM file $BAM not found";
+      return 42;
+  fi;
+  if [[ ! -e $MIP_DESIGN_FILE ]]; then
+      echo "$FUNCNAME() MIP_DESIGN_FILE not found";
+      return 42;
+  fi;
+  if [[ -z $MIP_DESIGN_SOURCE ]]; then
+      echo "$FUNCNAME() MIP_DESIGN_SOURCE not found";
+      return 42;
+  fi;
+  cmd="python $script_dir/PostAlignmentProcessing.py $BAM $MIP_DESIGN_FILE $MIP_DESIGN_SOURCE"
+  if [ $VERBOSE ]; then
+      echo -e "****** $FUNCNAME CMD\n$cmd";
+  fi;
+  $cmd;
+  if [ $? -ne 0 ]; then
+      echo "$FUNCNAME() problem";
+      return 42;
+  fi
+}
+
+sample_metrics_DepthOfCoverage_MIPs() {
+###############################################################################
+## Stats - Alignment QC Capture NoFlanking
+echo "*** Generating statistics (DepthOfCoverage)"
+###############################################################################
+  echo "*** Generating statistics (DepthOfCoverage)";
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+      echo "INIT SAMPLE FIRST";
+      return 42;
+  fi;
+  cd $RUN_DIR;
+  local REF_DepthOfCoverage=$1;
+  local BAM_DepthOfCoverage=$2;
+  local RUN_NAME=$3;
+  local BED_DepthOfCoverage_ARG=$4;
+  local BED_DepthOfCoverage_COMMAND=;
+  local GENE_LIST_ARG=$5;
+  local GENE_LIST_COMMAND=;
+  if [[ -z $REF_DepthOfCoverage || -z $BAM_DepthOfCoverage || -z $RUN_NAME ]]; then
+      echo "sample_metrics_DepthOfCoverage (REF,BAM,RUN_NAME[,BED,GENE_LIST_ARG]) missing args";
+      return 42;
+  fi;
+  if [[ -n $GENE_LIST_ARG ]]; then
+      GENE_LIST_COMMAND="-geneList $GENE_LIST_ARG";
+  fi;
+  if [[ -n $BED_DepthOfCoverage_ARG ]]; then
+      BED_DepthOfCoverage_COMMAND="--intervals $BED_DepthOfCoverage_ARG";
+  fi;
+  if [ $VERBOSE ]; then
+      echo -e "****** sample_metrics_DepthOfCoverage CMD\njava -Xmx${JAVA_MEM}g -Djava.io.tmpdir=$TEMP_DIR   -jar $GATK_DIR/dist/GenomeAnalysisTK.jar   -T DepthOfCoverage   --input_file $BAM_DepthOfCoverage   --out DepthOfCoverage.$RUN_NAME $BED_DepthOfCoverage_COMMAND   $GENE_LIST_COMMAND   --reference_sequence $REF_DepthOfCoverage   --summaryCoverageThreshold 10 --summaryCoverageThreshold 20  --summaryCoverageThreshold 30 --summaryCoverageThreshold 50 --summaryCoverageThreshold 75 --summaryCoverageThreshold 100 --summaryCoverageThreshold 500 --summaryCoverageThreshold 1000 --summaryCoverageThreshold 3000 --summaryCoverageThreshold 5000 --summaryCoverageThreshold 8000 --summaryCoverageThreshold 10000   --omitDepthOutputAtEachBase --omitLocusTable   --partitionType sample --partitionType readgroup   --minBaseQuality 0 --minMappingQuality 20 --includeRefNSites   -dcov 5000  --start 1 --stop 5000 --nBins 200";
+  fi;
+  java -Xmx${JAVA_MEM}g -Djava.io.tmpdir=$TEMP_DIR -jar $GATK_DIR/dist/GenomeAnalysisTK.jar -T DepthOfCoverage --input_file $BAM_DepthOfCoverage --out DepthOfCoverage.$RUN_NAME $BED_DepthOfCoverage_COMMAND $GENE_LIST_COMMAND --reference_sequence $REF_DepthOfCoverage --summaryCoverageThreshold 10 --summaryCoverageThreshold 20 --summaryCoverageThreshold 30 --summaryCoverageThreshold 50 --summaryCoverageThreshold 75 --summaryCoverageThreshold 100 --summaryCoverageThreshold 500 --summaryCoverageThreshold 1000 --summaryCoverageThreshold 3000 --summaryCoverageThreshold 5000 --summaryCoverageThreshold 8000 --summaryCoverageThreshold 10000 --omitDepthOutputAtEachBase --omitLocusTable --partitionType sample --partitionType readgroup --minBaseQuality 0 --minMappingQuality 20 --includeRefNSites -dcov 5000 --start 1 --stop 5000 --nBins 200;
+  return $?
+}
+
+sample_variant_total_recall_MIPs() {
+##########################################
+## VARIANT CALLING
+echo "*** STARTING VARIANT TOTAL RECALL"
+##########################################
+  echo "*** STARTING VARIANT TOTAL RECALL";
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+      echo "INIT SAMPLE FIRST";
+      return 42;
+  fi;
+  cd $RUN_DIR;
+  local SAMPLE_BAM=$1;
+  local SAMPLE_VARIANTS=$2;
+  local SAMPLE_VARIANT_SITES=$3;
+  local TARGET_BED=$4;
+  if [[ -z $SAMPLE_BAM || -z $SAMPLE_VARIANTS || -z $SAMPLE_VARIANTS || -z $TARGET_BED ]]; then
+      echo "sample_variant_total_recall (SAMPLE_BAM,SAMPLE_VARIANTS,SAMPLE_VARIANT_SITES,TARGET_BED,[DOWNSAMPLE_COV]) missing args";
+      return 42;
+  fi;
+  echo "****** STARTING UnifiedGenotyper total recall";
+  if [ $VERBOSE ]; then
+      echo -e "****** sample_genome_variant_calling CMD\njava -Xmx${MAX_MEM}g -Djava.io.tmpdir=$TEMP_DIR -jar $GATK_DIR/dist/GenomeAnalysisTK.jar   -T UnifiedGenotyper   -nt $THREADS   -R $REF   --input_file $SAMPLE_BAM   --out $SAMPLE_VARIANTS   --metrics_file ${SAMPLE_VARIANTS}.metrics   --intervals $TARGET_BED   --dbsnp $DBSNP   --genotype_likelihoods_model BOTH   --output_mode EMIT_ALL_SITES   -U ALLOW_UNSET_BAM_SORT_ORDER   --downsampling_type NONE   --allSitePLs   --read_filter BadCigar   --annotation HomopolymerRun";
+  fi;
+  java -Xmx${MAX_MEM}g -Djava.io.tmpdir=$TEMP_DIR -jar $GATK_DIR/dist/GenomeAnalysisTK.jar -T UnifiedGenotyper -nt $THREADS -R $REF --input_file $SAMPLE_BAM --out $SAMPLE_VARIANTS --metrics_file ${SAMPLE_VARIANTS}.metrics --intervals $TARGET_BED --dbsnp $DBSNP --genotype_likelihoods_model SNP --output_mode EMIT_ALL_SITES -U ALLOW_UNSET_BAM_SORT_ORDER --downsampling_type NONE --allSitePLs --read_filter BadCigar --annotation HomopolymerRun 2> $SAMPLE.UnifiedGenotyper.total_recall.stderr;
+  if [ $? -ne 0 ]; then
+      echo "sample_variant_total_recall UnifiedGenotyper problem";
+      return 42;
+  fi;
+  if [[ $SAMPLE_VARIANTS != *.gz ]]; then
+      if [ $VERBOSE ]; then
+          echo -e "****** bgzip CMD\nbgzip $SAMPLE_VARIANTS";
+      fi;
+      bgzip -f $SAMPLE_VARIANTS;
+      $SAMPLE_VARIANTS=$SAMPLE_VARIANTS.gz;
+      if [ $? -ne 0 ]; then
+          echo "sample_variant_total_recall bgzip problem";
+          return 42;
+      fi;
+  fi;
+  if [ $VERBOSE ]; then
+      echo -e "****** tabix CMD\ntabix -p vcf -f ${SAMPLE_VARIANTS}";
+  fi;
+  tabix -p vcf -f ${SAMPLE_VARIANTS};
+  if [ $? -ne 0 ]; then
+      echo "sample_variant_total_recall tabix problem";
+      return 42;
+  fi;
+  if [ $VERBOSE ]; then
+      echo -e "****** extracting variant sites only CMD\njava -Xmx${MAX_MEM}g -Djava.io.tmpdir=$TEMP_DIR -jar $GATK_DIR/dist/GenomeAnalysisTK.jar   -T SelectVariants   -nt $THREADS   -R $REF   --excludeNonVariants   --variant ${SAMPLE_VARIANTS}   --out ${SAMPLE_VARIANT_SITES}";
+  fi;
+  java -Xmx${MAX_MEM}g -Djava.io.tmpdir=$TEMP_DIR -jar $GATK_DIR/dist/GenomeAnalysisTK.jar -T SelectVariants -nt $THREADS -R $REF --excludeNonVariants --variant ${SAMPLE_VARIANTS} --out ${SAMPLE_VARIANT_SITES};
+  if [ $? -ne 0 ]; then
+      echo "sample_variant_total_recall problem extracting variant sites only";
+      return 42;
+  fi
+}
+
+sample_metrics_flagstat() {
+###########################################################
+## Stats - Metrics from Samtools Flagstat tool
+echo "*** Generating metrics using Samtools Flagstat"
+###########################################################
+if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then echo "INIT SAMPLE FIRST"; return 42; fi
+cd $RUN_DIR
+
+local BAMFILE=$1;
+local OUTFILE=$2
+
+if [[ -z $BAMFILE || -z $OUTFILE ]]; then echo "sample_metrics_flagstat (BAMFILE OUTFILE) missing args"; return 42; fi
+
+if [ $VERBOSE ]; then echo -e "****** sample_metrics_flagstat CMD\n\
+  $SAMTOOLS_DIR/samtools flagstat $BAMFILE > ${OUTFILE}";
+fi;
+
+$SAMTOOLS_DIR/samtools flagstat $BAMFILE > ${OUTFILE}
+
+return $?
+}
+
+sample_metrics_verifyBamID() {
+###############################################################################
+## Stats - Metrics for cross sample contamination using verifyBamID
+echo "*** Generating metrics for cross sample contamination using verifyBamID"
+###############################################################################
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then echo "INIT SAMPLE FIRST"; return 42; fi
+  cd $RUN_DIR
+  
+  local BAMFILE=$1;
+  local RESULTS_PREFIX=$2
+  
+  if [[ -z $BAMFILE || -z ${RESULTS_PREFIX} ]]; then echo "sample_metrics_verifyBamID (BAMFILE RESULTS_PREFIX) missing args"; return 42; fi
+  
+  if [ $VERBOSE ]; then echo -e "****** sample_metrics_verifyBamID CMD\n\
+  verifyBamID --vcf ${VERIFYBAMID_GENOTYPES} --bam $BAMFILE --self --out ${RESULTS_PREFIX}";
+  fi;
+  
+  verifyBamID --vcf ${VERIFYBAMID_GENOTYPES} --bam $BAMFILE --self --out ${RESULTS_PREFIX}
+  
+  return $?
+}
+
+sample_variant_haplotype_caller_MIPs() { 
+##############################################
+## VARIANT CALLING
+echo "*** STARTING VARIANT HAPLOTYPE CALLER"
+##############################################
+  if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then echo "INIT SAMPLE FIRST"; return 42; fi
+  cd $RUN_DIR;
+
+  local SAMPLE_BAM=$1
+  local GVCF=$2
+  local VCFFILE=$3
+  local HC_BAM_OUT=$4
+  local TARGET_BED=$5
+
+  if [[ -z $SAMPLE_BAM || -z $GVCF || -z $VCFFILE || -z $TARGET_BED ]]; then echo "sample_variant_haplotype_caller_MIPs (SAMPLE_BAM,GVCF,VCFFILE,TARGET_BED) missing args"; return 42; fi
+  let BUFFER=$JAVA_MEM*1048576;
+
+  echo "****** STARTING HaplotypeCaller"
+  if [[ $MAX_MEM -eq 4 ]]; then STEP_MEM=6; else STEP_MEM=$MAX_MEM; fi
+  cmd="java -Xmx${STEP_MEM}g -Djava.io.tmpdir=$TEMP_DIR -XX:ParallelGCThreads=1 -Dsamjdk.buffer_size=$BUFFER \
+  -jar $GATK_DIR/dist/GenomeAnalysisTK.jar \
+  -T HaplotypeCaller \
+  --emitRefConfidence GVCF \
+  --variant_index_type LINEAR \
+  --variant_index_parameter 128000 
+  -dt none \
+  -R $REF \
+  --input_file $SAMPLE_BAM \
+  --out $GVCF \
+  --bamOutput $HC_BAM_OUT \
+  -mbq 13 \
+  -A TandemRepeatAnnotator \
+  --dbsnp $DBSNP"
+
+  if [ $VERBOSE ]; then echo -e "****** sample_variant_haplotype_caller_MIPs HaplotypeCaller CMD\n$cmd"; fi
+  $cmd
+  if [ $? -ne 0 ]; then echo "sample_variant_haplotype_caller_MIPs problem HaplotypeCaller"; return 42; fi
+
+  echo "****** STARTING GenotypeGVCFs"
+  cmd="java -Xmx${JAVA_MEM}g -Djava.io.tmpdir=$TEMP_DIR -XX:ParallelGCThreads=1 -Dsamjdk.buffer_size=$BUFFER \
+  -jar $GATK_DIR/dist/GenomeAnalysisTK.jar \
+  -T GenotypeGVCFs \
+  -nt 11 \
+  --disable_auto_index_creation_and_locking_when_reading_rods \
+  -R $REF \
+  --intervals $TARGET_BED \
+  --variant $GVCF \
+  --out $VCFFILE"
+
+  if [ $VERBOSE ]; then echo -e "****** sample_variant_haplotype_caller_MIPs GenotypeGVCFs CMD\n$cmd"; fi
+  $cmd
+  if [ $? -ne 0 ]; then echo "sample_variant_haplotype_caller_MIPs problem GenotypeGVCFs"; return 42; fi
+
+  return $? 
+}
+
+sample_SAM_to_fastq() { 
+    echo "*** RUNNING SAM/BAM TO FASTQ";
+    if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+        echo "INIT SAMPLE FIRST";
+        return 42;
+    fi;
+    cd $RUN_DIR;
+    local BAM=$1;
+    local FASTQ1=$2;
+    local FASTQ2=$3;
+    local FASTQ_unpaired=$4;
+    if [[ -z $BAM || -z $FASTQ1 || -z $FASTQ2 || -z $FASTQ_unpaired ]]; then
+        echo "sample_SAM_to_fastq (BAM,FASTQ1,FASTQ2,FASTQ_unpaired) missing args";
+        return 42;
+    fi;
+    if [ $VERBOSE ]; then
+        echo -e "****** sample_SAM_to_fastq CMD\njava -Xmx${MAX_MEM}g -Djava.io.tmpdir=$TEMP_DIR   -jar $PICARD_DIR/picard.jar SamToFastq   VALIDATION_STRINGENCY=SILENT   TMP_DIR=$TEMP_DIR   INPUT=$BAM   FASTQ=$FASTQ1   SECOND_END_FASTQ=$FASTQ2   UNPAIRED_FASTQ=$FASTQ_unpaired";
+    fi;
+    java -Xmx${MAX_MEM}g -Djava.io.tmpdir=$TEMP_DIR -jar $PICARD_DIR/picard.jar SamToFastq VALIDATION_STRINGENCY=SILENT TMP_DIR=$TEMP_DIR INPUT=$BAM FASTQ=$FASTQ1 SECOND_END_FASTQ=$FASTQ2 UNPAIRED_FASTQ=$FASTQ_unpaired;
+    return $?
+}
+
+sample_callableLoci() {
+    echo "*** RUNNING CallableLoci";
+    if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then
+        echo "INIT SAMPLE FIRST";
+        return 42;
+    fi;
+    cd $RUN_DIR;
+    local BAM=$1;
+    local TARGETS_BED=$2;
+    if [[ -z $BAM || -z $TARGETS_BED ]]; then
+        echo "sample_SAM_to_fastq (BAM,TARGETS_BED) missing args";
+        return 42;
+    fi;
+    cmd1="""java -Xmx${JAVA_MEM}g -jar $GATK_DIR/dist/GenomeAnalysisTK.jar \
+    -T CallableLoci \
+    -R $REF \
+    --summary $SAMPLE.callable_summary \
+    -o $SAMPLE.pre-Callability.bed \
+    -I $BAM \
+    -L $TARGETS_BED \
+    -im OVERLAPPING_ONLY \
+    --format BED \
+    --minDepth 10 \
+    --minDepthForLowMAPQ 10 \
+    --minMappingQuality 20 \
+    --minBaseQuality 20"""
+    cmd2="""bedtools intersect -a $TARGETS_BED -b $SAMPLE.pre-Callability.bed -wao |cut -f 4-9 | awk '{if($6>70) print}' > $SAMPLE.Callability.bed"""
+    cmd3="""rm $SAMPLE.pre-Callability.bed $SAMPLE.callable_summary"""
+    if [ $VERBOSE ]; then
+        echo -e "****** $FUNCNAME CMD\n$cmd1\n$cmd2\n$cmd3"
+    fi
+    $cmd1
+    bedtools intersect -a $TARGETS_BED -b $SAMPLE.pre-Callability.bed -wao |cut -f 4-9 | awk '{if($6>70) print}' > $SAMPLE.Callability.bed
+    rm $SAMPLE.pre-Callability.bed $SAMPLE.callable_summary
+    return $?
+}

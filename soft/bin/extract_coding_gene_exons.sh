@@ -1,0 +1,1 @@
+../src/mipgen/tools/extract_coding_gene_exons.sh

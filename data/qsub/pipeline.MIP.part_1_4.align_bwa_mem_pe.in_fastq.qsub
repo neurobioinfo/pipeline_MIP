@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+#PBS -l walltime=48:0:0
+#PBS -r n
+#PBS -j oe
+#PBS -W umask=002
+
+umask 002
+echo timestamp $(date +%s)
+
+#-----------------------------------------------------#
+#                                                     #
+# INITIALIZE VARIABLES                                #
+#                                                     #
+#-----------------------------------------------------#
+if [[ -z $SAMPLE ]]; then echo "ERROR: you must supply SAMPLE variable as -v to qsub"; exit 42; fi
+if [[ -z $DIR ]]; then echo "ERROR: you must supply DIR variable as -v to qsub"; exit 42; fi
+if [[ -z $THREADS ]]; then echo "ERROR: you must supply THREADS variable as -v to qsub"; exit 42; fi
+if [[ -z $MAX_MEM ]]; then echo "ERROR: you must supply MiAX_MEM variable as -v to qsub"; exit 42; fi
+if [[ -z $PIPELINE_HOME ]]; then echo "ERROR: you must supply PIPELINE_HOME variable as -v to qsub"; exit 42; fi
+if [[ -z $FASTQ1 ]]; then echo "ERROR: you must supply FASTQ1 variable as -v to qsub"; exit 42; fi
+if [[ -z $FASTQ2 ]]; then echo "ERROR: you must supply FASTQ2 variable as -v to qsub"; exit 42; fi
+if [[ -z $SAM ]]; then echo "ERROR: you must supply SAM variable as -v to qsub"; exit 42; fi
+if [[ -z $RUN ]]; then echo "ERROR: you must supply RUN variable as -v to qsub"; exit 42; fi
+if [[ -z $CENTER ]]; then echo "ERROR: you must supply CENTER variable as -v to qsub"; exit 42; fi
+if [[ -z $DONE ]]; then echo "ERROR: you must supply DONE variable as -v to qsub"; exit 42; fi
+if [[ -z $SFS ]]; then export SFS=0; fi
+if [[ -z $KEEP_INTERMEDIATES ]]; then export KEEP_INTERMEDIATES=0; fi
+if [[ -z $LIBRARY ]]; then export LIBRARY=LIB1; else export LIBRARY; fi
+
+echo "************************************************************"
+echo "* pipeline.generic.part_1_4.align_bwa_mem_pe.in_fastq.qsub"
+echo "************************************************************"
+echo "* SAMPLE:        $SAMPLE"
+echo "* DIR:           $DIR"
+echo "* THREADS:       $THREADS"
+echo "* MAX_MEM:       $MAX_MEM"
+echo "* PIPELINE_HOME: $PIPELINE_HOME"
+echo "* FASTQ1:        $FASTQ1"
+echo "* FASTQ2:        $FASTQ2"
+echo "* SAM:           $SAM"
+echo "* RUN:           $RUN"
+echo "* CENTER:        $CENTER"
+echo "* SFS            $SFS"
+echo "* KEEP INTER:    $KEEP_INTERMEDIATES"
+echo "* LIBRARY:       $LIBRARY"
+echo "* VERBOSE        $VERBOSE"
+echo "* DONE:          $DONE"
+echo "****************************************************"
+
+#-----------------------------------------------------#
+#                                                     #
+# START PIPELINE                                      #
+#                                                     #
+#-----------------------------------------------------#
+cd $DIR
+# INIT PIPELINE VARIABLES
+. $PIPELINE_HOME/data/templates/init_pipeline.sh $PIPELINE_HOME
+# DEFINING PIPELINE SPECIFIC VARIABLES
+# LOAD FUNCTION LIBRARY
+. $PIPELINE_HOME/data/templates/function.library
+# INIT THE SAMPLE
+set_verbose $VERBOSE
+sample_init $SAMPLE $DIR
+if [ $FUNCTION_LIBRARY_INIT -ne 1 ]; then echo "INIT SAMPLE PROBLEM"; exit 42; fi
+
+cd $DIR
+if [ $VERBOSE ]; then 
+  echo "****** CMD: sample_BWA_alignMemPE_MIPs $FASTQ1 $FASTQ2 $SAM $THREADS $REFERENCE @RG"\\t"ID:${SAMPLE}_${RUN}"\\t"PL:illumina"\\t"PU:${SAMPLE}_${RUN}_PU"\\t"LB:${SAMPLE}_${LIBRARY}"\\t"SM:${SAMPLE}"\\t"CN:${CENTER}"; 
+fi
+  sample_BWA_alignMemPE_MIPs $FASTQ1 $FASTQ2 $SAI1 $SAI2 $SAM $THREADS $REFERENCE @RG"\t"ID:${SAMPLE}_${RUN}"\t"PL:illumina"\t"PU:${SAMPLE}_${RUN}_PU"\t"LB:${SAMPLE}_${LIBRARY}"\t"SM:${SAMPLE}"\t"CN:${CENTER}
+if [ $? -eq 0 ]; then 
+  touch $DONE;
+  if [ $VERBOSE ]; then echo SUCCESS; fi;  
+else echo "*** Problem in sample_BWA_alignMemPE"; exit 42; fi
+echo timestamp $(date +%s)
